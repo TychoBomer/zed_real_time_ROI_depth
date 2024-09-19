@@ -1,0 +1,101 @@
+import os, sys
+import torch
+import numpy as np
+import cv2
+import time
+from sam2.build_sam import build_sam2_video_predictor, build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+sys.path.insert(0, os.getcwd())
+from wrappers.pyzed_wrapper import pyzed_wrapper as pw
+
+os.environ['TORCH_CUDNN_SDPA_ENABLED'] = '1'
+# Set up model checkpoint and configuration
+sam2_checkpoint = "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/checkpoints/sam2_hiera_large.pt"
+model_cfg = "sam2_hiera_l.yaml"
+
+# Initialize video predictor and image predictor
+video_predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
+sam2_image_model = build_sam2(model_cfg, sam2_checkpoint)
+image_predictor = SAM2ImagePredictor(sam2_image_model)
+
+# Create an instance of the Wrapper class
+wrapper = pw.Wrapper('id')
+wrapper.open_input_source()
+
+# Extracting intrinsics (not used directly here)
+l_intr, r_intr = wrapper.get_intrinsic()
+
+wrapper.start_stream()
+
+if_init = False
+
+try:
+    while True:
+        # Retrieve a frame (image and depth)
+        if wrapper.retrieve(is_image=True, is_measure=True):
+            ts = time.time()
+            left_image = wrapper.output_image
+            left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
+
+            width, height = left_image_rgb.shape[:2][::-1]
+
+            if not if_init:
+                # Define a large bounding box in the center of the image
+                bbox_width = int(width * 0.4)
+                bbox_height = int(height * 0.4)
+                center_x, center_y = width // 2, height // 2
+                top_left_x = max(center_x - bbox_width // 2, 0)
+                top_left_y = max(center_y - bbox_height // 2, 0)
+                bottom_right_x = min(center_x + bbox_width // 2, width)
+                bottom_right_y = min(center_y + bbox_height // 2, height)
+
+                # Define the bounding box
+                bbox = np.array([[top_left_x, top_left_y], [bottom_right_x, bottom_right_y]], dtype=np.float32)
+
+                # Initialize image predictor with the first frame
+                image_predictor.set_image(left_image_rgb)
+                masks, scores, logits = image_predictor.predict(
+                    point_coords=None,
+                    point_labels=None,
+                    box=bbox,
+                    multimask_output=False,
+                )
+
+                # Initialize the video predictor with the first frame's mask
+                ann_frame_idx = 0
+                ann_obj_id = 1
+                _, out_obj_ids, out_mask_logits = video_predictor.add_new_prompt(
+                    frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=bbox
+                )
+
+                if_init = True
+
+            else:
+                # Track the object in subsequent frames
+                out_obj_ids, out_mask_logits = video_predictor.track(left_image_rgb)
+
+                # Create a mask for the current frame
+                all_mask = np.zeros((height, width, 1), dtype=np.uint8)
+                for i in range(len(out_obj_ids)):
+                    out_mask = (out_mask_logits[i] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8) * 255
+                    all_mask = cv2.bitwise_or(all_mask, out_mask)
+
+                # Convert the mask to an RGB format for overlay
+                all_mask = cv2.cvtColor(all_mask, cv2.COLOR_GRAY2RGB)
+                left_image_rgb = (left_image_rgb * 255).astype(np.uint8)
+                left_image_rgb = cv2.addWeighted(left_image_rgb, 1, all_mask, 0.5, 0)
+
+            # Draw the bounding box on the image for visualization
+            cv2.rectangle(left_image_rgb, (top_left_x, top_left_y), (bottom_right_x, bottom_right_y), (0, 255, 0), 2)
+            cv2.imwrite('test.png', left_image_rgb)
+
+            te = time.time()
+            print(f' time needed: {te-ts}')
+
+except Exception as e:
+    print(f"An error occurred: {e}")
+
+finally:
+    # Stop streaming and close the input source
+    wrapper.stop_stream()
+    wrapper.close_input_source()
