@@ -3,7 +3,7 @@ import torch
 import cv2
 import numpy as np
 
-import time
+from concurrent.futures import ThreadPoolExecutor
 
 
 
@@ -27,11 +27,21 @@ def apply_nms(detections, nms_threshold):
     
     return detections
 
-
-# Mask post-processing helper
+# Mask post-processing helper (Parallelized)
 def process_masks(out_obj_ids, out_mask_logits, height, width):
     all_mask = np.zeros((height, width, 1), dtype=np.uint8)
-    for i in range(len(out_obj_ids)):
-        out_mask = (out_mask_logits[i] > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8) * 255
-        all_mask = cv2.bitwise_or(all_mask, out_mask)
+
+    def process_single_mask(mask_logit):
+        out_mask = (mask_logit > 0.0).permute(1, 2, 0).cpu().numpy().astype(np.uint8) * 255
+        return out_mask
+
+    with ThreadPoolExecutor() as executor:
+        mask_futures = [executor.submit(process_single_mask, mask_logit) for mask_logit in out_mask_logits]
+        
+        # Combine masks once processed
+        for future in mask_futures:
+            out_mask = future.result()
+            all_mask = cv2.bitwise_or(all_mask, out_mask)
+
     return all_mask
+

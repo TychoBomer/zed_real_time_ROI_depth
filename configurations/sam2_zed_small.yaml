@@ -1,6 +1,6 @@
 grounding_dino:
   # caption: "keyboard.cup.laptop.hand"
-  caption: "cup"
+  caption: "keyboard.bottle"
 
   box_threshold: 0.35
   text_threshold: 0.25
