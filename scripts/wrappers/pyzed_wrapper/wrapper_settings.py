@@ -46,7 +46,7 @@ class MeasureRetrievalParameters(object):
 
     def __init__(self):
         self.measure = sl.MEASURE.DEPTH_U16_MM
-        self.type = sl.MEM.CPU
+        self.type = sl.MEM.CPU # MEM.GPU removes from stereolabs side
         self.resolution = sl.Resolution(0, 0)
         return
 
@@ -81,7 +81,7 @@ class CustomInitialParameters(object):
     
 class CustomRuntimeParameters(object):
     def __init__(self):
-        self.FILL_DEPTH = False
+        self.FILL_DEPTH = True
 
         return
     
