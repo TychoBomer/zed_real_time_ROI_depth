@@ -81,7 +81,7 @@ class CustomInitialParameters(object):
     
 class CustomRuntimeParameters(object):
     def __init__(self):
-        self.FILL_DEPTH = True
+        self.FILL_DEPTH = False
 
         return
     

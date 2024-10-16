@@ -65,7 +65,7 @@ def run(cfg) -> None:
                 # Convert left image to RGB format
                 left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
                 height, width, _ = left_image_rgb.shape
-                cv2.imwrite(os.path.join(output_folder, 'left_img_og.png'), left_image_rgb)
+                # cv2.imwrite(os.path.join(output_folder, 'left_img_og.png'), left_image_rgb)
 
                 if not if_init:
                     predictor.load_first_frame(left_image_rgb)
