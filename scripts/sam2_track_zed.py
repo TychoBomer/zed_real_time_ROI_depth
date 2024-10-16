@@ -32,9 +32,6 @@ from utils import process_masks, apply_nms
 
 
 
-
-
-
 # Initialize GPU settings
 if torch.cuda.get_device_properties(0).major >= 8:
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -102,7 +99,7 @@ def mask_guided_filter(depth_map, guidance_img, mask):
     eps = 1e-2  # regularization term
 
     # Guided filter with mask as the guide
-    refined_depth = cv2.ximgproc.guidedFilter(guide=guidance_img, src=depth_map_filled, radius=r, eps=eps)
+    refined_depth = cv2.ximgproc.guidedFilter(guide=mask, src=depth_map_filled, radius=r, eps=eps)
 
     # Optional: Ensure that we only smooth inside the mask
     refined_depth = np.where(mask > 0, refined_depth, depth_map_filled)
