@@ -1,8 +1,8 @@
 grounding_dino:
   # caption: "keyboard.cup.laptop.hand"
-  caption: "hand"
+  caption: "pencil"
 
-  box_threshold: 0.35
+  box_threshold: 0.65
   text_threshold: 0.25
   nms_threshold: 0.6
   config_path: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"

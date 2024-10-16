@@ -65,7 +65,7 @@ class CustomInitialParameters(object):
         self.COORDINATE_UNITS = sl.UNIT.MILLIMETER
         self.CAMERA_FPS = 30
         self.DEPTH_MIN_DIST = 150
-        self.DEPTH_MAX_DIST = 3000
+        self.DEPTH_MAX_DIST = 1000
         return
     
 
