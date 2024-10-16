@@ -50,7 +50,7 @@ from utils import process_masks, apply_nms
 
 # External input queue for dynamic caption updates
 caption_queue = queue.Queue()
-user_caption = "phone"
+user_caption = "pencil"
 fps_print_active = True
 
 # Function to get user input without interfering with FPS printing
@@ -64,6 +64,50 @@ def update_caption():
 caption_thread = threading.Thread(target=update_caption)
 caption_thread.daemon = True
 caption_thread.start()
+
+
+
+def mask_guided_filter(depth_map, guidance_img, mask):
+    """
+    Apply guided filter to the depth map using the mask as a guide, handling zero values inside the mask.
+    Args:
+        depth_map (np.ndarray): The input depth map.
+        guidance_img (np.ndarray): The guidance image (can be the mask or RGB image).
+        mask (np.ndarray): The binary object mask.
+    Returns:
+        refined_depth (np.ndarray): The depth map after guided filtering.
+    """
+    # Ensure depth map is float32
+    depth_map = depth_map.astype(np.float32)
+    
+    # Handle zero values in the depth map (treat zero as invalid depth)
+    zero_mask = (depth_map == 0)  # Find zero values in the depth map
+    depth_map_filled = np.copy(depth_map)
+
+    # Inpaint zero values but only within the mask
+    if np.any(zero_mask):
+        # Use the mask to guide the inpainting (only inpaint within the mask area)
+        depth_map_filled[zero_mask & (mask > 0)] = 0  # Set zeros inside mask to zero for inpainting
+        inpaint_radius = 5
+        depth_map_filled = cv2.inpaint(depth_map_filled.astype(np.uint8), 
+                                       (zero_mask & (mask > 0)).astype(np.uint8), 
+                                       inpaint_radius, cv2.INPAINT_TELEA)
+    
+    # Normalize the mask and guidance image
+    mask = mask.astype(np.float32) / 255.0  # Normalize mask to [0, 1] range
+    guidance_img = guidance_img.astype(np.float32) / 255.0
+
+    # Apply the guided filter
+    r = 8  # radius of the guided filter
+    eps = 1e-2  # regularization term
+
+    # Guided filter with mask as the guide
+    refined_depth = cv2.ximgproc.guidedFilter(guide=guidance_img, src=depth_map_filled, radius=r, eps=eps)
+
+    # Optional: Ensure that we only smooth inside the mask
+    refined_depth = np.where(mask > 0, refined_depth, depth_map_filled)
+    
+    return refined_depth
 
 def run(cfg) -> None:
     global user_caption, fps_print_active
@@ -146,6 +190,10 @@ def run(cfg) -> None:
                         mask_colored[:, :, 1] = all_mask
                         left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
                         if_init = True  # Re-initialization done, start tracking
+                        
+                         # Apply mask-guided filtering to the depth map
+                        refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
+                        cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
                         ann_frame_idx+=1
                 else:
                     # Continue tracking with the current object
@@ -154,6 +202,9 @@ def run(cfg) -> None:
                     mask_colored = np.zeros_like(left_image_rgb)
                     mask_colored[:, :, 1] = all_mask
                     left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
+                    refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
+                    cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
+                    
                     ann_frame_idx+=1
 
             # ann_frame_idx += 1
