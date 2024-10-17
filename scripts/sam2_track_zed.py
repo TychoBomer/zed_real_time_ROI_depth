@@ -66,13 +66,15 @@ caption_thread.start()
 
 def mask_guided_filter(depth_map, guidance_img, mask):
     """
-    Apply guided filter to the depth map using the mask as a guide, handling zero values inside the mask.
+    Apply guided filter only inside the mask, leaving areas outside the mask unchanged.
+    
     Args:
         depth_map (np.ndarray): The input depth map.
         guidance_img (np.ndarray): The guidance image (can be the mask or RGB image).
         mask (np.ndarray): The binary object mask.
+        
     Returns:
-        refined_depth (np.ndarray): The depth map after guided filtering.
+        refined_depth (np.ndarray): The depth map after guided filtering within the mask.
     """
     # Ensure depth map is float32
     depth_map = depth_map.astype(np.float32)
@@ -83,26 +85,25 @@ def mask_guided_filter(depth_map, guidance_img, mask):
 
     # Inpaint zero values but only within the mask
     if np.any(zero_mask):
-        # Use the mask to guide the inpainting (only inpaint within the mask area)
         depth_map_filled[zero_mask & (mask > 0)] = 0  # Set zeros inside mask to zero for inpainting
         inpaint_radius = 5
         depth_map_filled = cv2.inpaint(depth_map_filled.astype(np.uint8), 
                                        (zero_mask & (mask > 0)).astype(np.uint8), 
                                        inpaint_radius, cv2.INPAINT_TELEA)
-    
+
     # Normalize the mask and guidance image
     mask = mask.astype(np.float32) / 255.0  # Normalize mask to [0, 1] range
     guidance_img = guidance_img.astype(np.float32) / 255.0
 
-    # Apply the guided filter
-    r = 8  # radius of the guided filter
-    eps = 1e-2  # regularization term
+    # Apply the guided filter **ONLY** within the mask
+    filtered_region = np.copy(depth_map_filled)
+    filtered_region[mask == 0] = 0  # Set pixels outside the mask to zero
 
-    # Guided filter with mask as the guide
-    refined_depth = cv2.ximgproc.guidedFilter(guide=mask, src=depth_map_filled, radius=r, eps=eps)
+    # Apply guided filter **locally** to the region inside the mask
+    refined_region = cv2.ximgproc.guidedFilter(guide=guidance_img, src=filtered_region, radius=8, eps=1e-2)
 
-    # Optional: Ensure that we only smooth inside the mask
-    refined_depth = np.where(mask > 0, refined_depth, depth_map_filled)
+    # Combine the refined region back into the original depth map, leaving other areas unchanged
+    refined_depth = np.where(mask > 0, refined_region, depth_map)
     
     return refined_depth
 
