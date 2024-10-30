@@ -85,7 +85,7 @@ model:
         num_layers: 2
 
   num_maskmem: 7
-  image_size: 1024
+  image_size: 768
   # apply scaled sigmoid on mask logits for memory encoder, and directly feed input mask as output mask
   sigmoid_scale_for_mem_enc: 20.0
   sigmoid_bias_for_mem_enc: -10.0
@@ -113,4 +113,4 @@ model:
   multimask_max_pt_num: 1
   use_mlp_for_obj_ptr_proj: true
   # Compilation flag
-  compile_image_encoder: false
+  compile_image_encoder: true

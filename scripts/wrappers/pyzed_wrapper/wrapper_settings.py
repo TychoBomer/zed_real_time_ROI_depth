@@ -61,7 +61,7 @@ class MeasureRetrievalParameters(object):
 class CustomInitialParameters(object):
     def __init__(self):
         self.DEPTH_MODE = sl.DEPTH_MODE.NEURAL
-        self.RESOLUTION = sl.RESOLUTION.HD720
+        self.RESOLUTION = sl.RESOLUTION.VGA
         self.COORDINATE_UNITS = sl.UNIT.MILLIMETER
         self.CAMERA_FPS = 30
         self.DEPTH_MIN_DIST = 100

@@ -48,7 +48,7 @@ class SAM2CameraPredictor(SAM2Base):
     ):
         if isinstance(img, np.ndarray):
             img_np = img
-            img_np = cv2.resize(img_np, (image_size, image_size)) / 255.0
+            img_np = cv2.resize(img_np, (image_size, image_size), interpolation=cv2.INTER_CUBIC) / 255.0
             height, width = img.shape[:2]
         else:
             img_np = (
@@ -71,7 +71,9 @@ class SAM2CameraPredictor(SAM2Base):
         )
         img, width, height = self.perpare_data(img, image_size=self.image_size)
         self.condition_state["images"] = [img]
-        self.condition_state["num_frames"] = len(self.condition_state["images"])
+        # self.condition_state["num_frames"] = len(self.condition_state["images"])
+        self.condition_state["num_frames"] = 1
+
         self.condition_state["video_height"] = height
         self.condition_state["video_width"] = width
         self._get_image_feature(frame_idx=0, batch_size=1)
@@ -719,7 +721,9 @@ class SAM2CameraPredictor(SAM2Base):
         }
 
         # output_dict[storage_key][self.frame_idx] = current_out
-        self._manage_memory_obj(self.frame_idx, current_out)
+        # self._manage_memory_obj(self.frame_idx, current_out)
+        storage_key = "non_cond_frame_outputs"
+        self.condition_state['output_dict'][storage_key][self.frame_idx]=current_out
 
         _, video_res_masks = self._get_orig_video_res_output(pred_masks_gpu)
         return obj_ids, video_res_masks

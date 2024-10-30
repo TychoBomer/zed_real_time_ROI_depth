@@ -1,36 +1,17 @@
 import warnings
 import os,sys
-import torch, torchvision
+import torch
 import numpy as np
 import cv2
 import numpy as np
 import time
 from hydra import initialize, compose
+from hydra.core.global_hydra import GlobalHydra
 
-# Additional imports for non-blocking input
 import threading
 import queue
 
-
-if torch.cuda.get_device_properties(0).major >= 8:
-    # turn on tfloat32 for Ampere GPUs (https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices)
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-torch.backends.cudnn.benchmark = True
-#     # set to bfloat for entire file
-torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
-
-
-from sam2.build_sam import build_sam2_camera_predictor
 sys.path.insert(0, os.getcwd())
-from wrappers.pyzed_wrapper import pyzed_wrapper as pw
-
-from GroundingDINO.groundingdino.util.inference import Model
-
-from hydra.core.global_hydra import GlobalHydra
-from utils import process_masks, apply_nms
-
-
 
 # Initialize GPU settings
 if torch.cuda.get_device_properties(0).major >= 8:
@@ -39,85 +20,34 @@ if torch.cuda.get_device_properties(0).major >= 8:
 torch.backends.cudnn.benchmark = True
 torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
-from sam2.build_sam import build_sam2_camera_predictor
-sys.path.insert(0, os.getcwd())
-from wrappers.pyzed_wrapper import pyzed_wrapper as pw
-from GroundingDINO.groundingdino.util.inference import Model
-from utils import process_masks, apply_nms
 
-# External input queue for dynamic caption updates
+from wrappers.pyzed_wrapper import pyzed_wrapper as pw
+from utils import process_masks, apply_nms, build_models, mask_guided_filter, update_caption
+
+
+
+
+# External input queue for queued caption inputs
 caption_queue = queue.Queue()
-user_caption = "pencil"
+user_caption = "bottle"
 fps_print_active = True
 
-# Function to get user input without interfering with FPS printing
-def update_caption():
-    global user_caption, fps_print_active
-    while True:
-        new_caption = input("\nEnter new object to detect (e.g., 'bottle'): ")
-        caption_queue.put(new_caption)
-
 # Start the input handler in a separate thread
-caption_thread = threading.Thread(target=update_caption)
+caption_thread = threading.Thread(target=update_caption, args=(caption_queue, user_caption))
 caption_thread.daemon = True
 caption_thread.start()
 
 
 
-def mask_guided_filter(depth_map, guidance_img, mask):
-    """
-    Apply guided filter only inside the mask, leaving areas outside the mask unchanged.
-    
-    Args:
-        depth_map (np.ndarray): The input depth map.
-        guidance_img (np.ndarray): The guidance image (can be the mask or RGB image).
-        mask (np.ndarray): The binary object mask.
-        
-    Returns:
-        refined_depth (np.ndarray): The depth map after guided filtering within the mask.
-    """
-    # Ensure depth map is float32
-    depth_map = depth_map.astype(np.float32)
-    
-    # Handle zero values in the depth map (treat zero as invalid depth)
-    zero_mask = (depth_map == 0)  # Find zero values in the depth map
-    depth_map_filled = np.copy(depth_map)
-
-    # Inpaint zero values but only within the mask
-    if np.any(zero_mask):
-        depth_map_filled[zero_mask & (mask > 0)] = 0  # Set zeros inside mask to zero for inpainting
-        inpaint_radius = 5
-        depth_map_filled = cv2.inpaint(depth_map_filled.astype(np.uint8), 
-                                       (zero_mask & (mask > 0)).astype(np.uint8), 
-                                       inpaint_radius, cv2.INPAINT_TELEA)
-
-    # Normalize the mask and guidance image
-    mask = mask.astype(np.float32) / 255.0  # Normalize mask to [0, 1] range
-    guidance_img = guidance_img.astype(np.float32) / 255.0
-
-    # Apply the guided filter **ONLY** within the mask
-    filtered_region = np.copy(depth_map_filled)
-    filtered_region[mask == 0] = 0  # Set pixels outside the mask to zero
-
-    # Apply guided filter **locally** to the region inside the mask
-    refined_region = cv2.ximgproc.guidedFilter(guide=guidance_img, src=filtered_region, radius=8, eps=1e-2)
-
-    # Combine the refined region back into the original depth map, leaving other areas unchanged
-    refined_depth = np.where(mask > 0, refined_region, depth_map)
-    
-    return refined_depth
 
 def run(cfg) -> None:
     global user_caption, fps_print_active
+    if_init = False
+    
     output_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'output_img')
     os.makedirs(output_folder, exist_ok=True)
 
-    if_init = False
-    grounding_dino_model = Model(
-        model_config_path=cfg.grounding_dino.config_path,
-        model_checkpoint_path=cfg.grounding_dino.checkpoint_path
-    )
-    predictor = build_sam2_camera_predictor(cfg.sam2.model_cfg, cfg.sam2.checkpoint)
+    sam2_predictor, grounding_dino_model = build_models(cfg)
 
     wrapper = pw.Wrapper(cfg.camera.connection_type)
     wrapper.open_input_source()
@@ -136,6 +66,7 @@ def run(cfg) -> None:
             ts = time.time()
 
             if wrapper.retrieve(is_image=True, is_measure=True):
+                # Extract from ZED camera
                 left_image = wrapper.output_image
                 depth_map = wrapper.output_measure
 
@@ -150,14 +81,15 @@ def run(cfg) -> None:
                 if not caption_queue.empty():
                     user_caption = caption_queue.get()
                     print(f"\nUpdated object to detect: {user_caption}")
-                    if_init = False  # Force re-initialization with new object
+                    # Force re-initialization with new object
+                    if_init = False  
                     ann_frame_idx = 0
                     ann_obj_id = 1
 
 
                 # Re-initialize with new object detection if a new caption is provided
                 if not if_init:
-                    predictor.load_first_frame(left_image_rgb)
+                    sam2_predictor.load_first_frame(left_image_rgb)
                     ann_obj_id = 1  # Reset object ID counter for new object
                     with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
                         detections = grounding_dino_model.predict_with_classes(
@@ -178,7 +110,7 @@ def run(cfg) -> None:
                             cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                             input_boxes = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
-                            _, out_obj_ids, out_mask_logits = predictor.add_new_prompt(
+                            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
                                 frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=input_boxes
                             )
                             ann_obj_id += 1
@@ -195,7 +127,7 @@ def run(cfg) -> None:
                         ann_frame_idx+=1
                 else:
                     # Continue tracking with the current object
-                    out_obj_ids, out_mask_logits = predictor.track(left_image_rgb)
+                    out_obj_ids, out_mask_logits = sam2_predictor.track(left_image_rgb)
                     all_mask = process_masks(out_obj_ids, out_mask_logits, height, width)
                     mask_colored = np.zeros_like(left_image_rgb)
                     mask_colored[:, :, 1] = all_mask
