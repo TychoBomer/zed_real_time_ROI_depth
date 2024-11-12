@@ -22,22 +22,17 @@ torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
 
 from wrappers.pyzed_wrapper import pyzed_wrapper as pw
-from utils import process_masks, apply_nms, build_models, mask_guided_filter, update_caption
-
-
-
+from utils import process_masks, apply_nms, build_models, mask_guided_filter, update_caption, refine_depth_with_preprocessing
 
 # External input queue for queued caption inputs
 caption_queue = queue.Queue()
-user_caption = "bottle"
+user_caption = "keyboard"
 fps_print_active = True
 
 # Start the input handler in a separate thread
 caption_thread = threading.Thread(target=update_caption, args=(caption_queue, user_caption))
 caption_thread.daemon = True
 caption_thread.start()
-
-
 
 
 def run(cfg) -> None:
@@ -122,7 +117,8 @@ def run(cfg) -> None:
                         if_init = True  # Re-initialization done, start tracking
                         
                          # Apply mask-guided filtering to the depth map
-                        refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
+                        # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
+                        refined_depth_map = refine_depth_with_preprocessing(depth_map, left_image_rgb, all_mask)                        
                         cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
                         ann_frame_idx+=1
                 else:
@@ -132,7 +128,8 @@ def run(cfg) -> None:
                     mask_colored = np.zeros_like(left_image_rgb)
                     mask_colored[:, :, 1] = all_mask
                     left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
-                    refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
+                    # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
+                    refined_depth_map = refine_depth_with_preprocessing(depth_map, left_image_rgb, all_mask)                    
                     cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
                     
                     ann_frame_idx+=1

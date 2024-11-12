@@ -127,6 +127,52 @@ def mask_guided_filter(depth_map: np.ndarray, guidance_img: np.ndarray, mask: np
     
     return refined_depth
 
+def preprocess_depth_map(depth_map, kernel_size=5):
+    # Fill small gaps by median filtering
+    filled_depth_map = cv2.medianBlur(depth_map, kernel_size)
+    return filled_depth_map
+def inpaint_depth_map(depth_map, inpaint_radius=3):
+    # Create a mask where depth is zero or NaN
+    mask = (depth_map == 0).astype(np.uint8)
+    # Use inpainting to fill zero or NaN values
+    inpainted_depth_map = cv2.inpaint(depth_map, mask, inpaint_radius, cv2.INPAINT_TELEA)
+    return inpainted_depth_map
+
+def refine_depth_with_preprocessing(depth_map, left_image, mask, lmbda=8000, sigma=1.5, inpaint_radius=3):
+    """
+    Refine depth map by combining inpainting, WLS filtering, and mask-guided blending.
+
+    Parameters:
+        depth_map (np.ndarray): Input depth map.
+        left_image (np.ndarray): Left RGB image from the stereo pair (used as guidance).
+        mask (np.ndarray): SAM2 segmentation mask (binary mask).
+        lmbda (float): Regularization parameter for WLS filter.
+        sigma (float): Smoothness parameter for WLS filter.
+        inpaint_radius (int): Radius for inpainting gaps in the depth map.
+
+    Returns:
+        np.ndarray: Refined depth map.
+    """
+    # Step 1: Inpaint large missing regions
+    depth_map_inpainted = inpaint_depth_map(depth_map, inpaint_radius)
+    
+    # Step 2: Convert to 16-bit for WLS filtering
+    depth_map_inpainted = (depth_map_inpainted * 16).astype(np.int16)
+    
+    # Step 3: Apply WLS filtering for edge-preserving refinement
+    wls_filter = cv2.ximgproc.createDisparityWLSFilterGeneric(False)
+    wls_filter.setLambda(lmbda)
+    wls_filter.setSigmaColor(sigma)
+    refined_depth = wls_filter.filter(depth_map_inpainted, left_image)
+    refined_depth = refined_depth.astype(np.float32) / 16.0  # Normalize back
+
+    # Step 4: Weighted blending to enhance masked areas
+    mask = mask.astype(np.float32) / 255.0
+    final_depth_map = depth_map * (1 - mask) + refined_depth * mask
+
+    return final_depth_map
+1   
+
 
 def update_caption(caption_queue: queue.Queue, user_caption: str):
     """
