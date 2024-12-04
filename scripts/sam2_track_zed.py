@@ -22,7 +22,7 @@ torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
 
 from wrappers.pyzed_wrapper import pyzed_wrapper as pw
-from utils import process_masks, apply_nms, build_models, mask_guided_filter, update_caption, refine_depth_with_preprocessing
+from utils import process_masks, apply_nms, build_models, mask_guided_filter, update_caption, refine_depth_with_postprocessing
 
 # External input queue for queued caption inputs
 caption_queue = queue.Queue()
@@ -35,7 +35,56 @@ caption_thread.daemon = True
 caption_thread.start()
 
 
-def run(cfg) -> None:
+class Sam2PromptType:
+    valid_prompt_types = {"g_dino_bbox", "bbox", "point", "mask"} # all types SAM2 could handle
+
+    def __init__(self, prompt_type, **kwargs) -> None:
+        self._prompt_type = None
+        self.prompt_type = prompt_type # attempts the set function @prompt_type.setter
+        self.params = kwargs
+        self.validate()
+
+    def validate(self)->None:
+        if self.prompt_type == "point":
+            if "point_coords" not in self.params or not isinstance(self.params["point_coords"], tuple) or len(self.params["point_coords"])!=2:
+                raise ValueError("For sam2 prompt 'point', 'point_coords' must be provided as a tuple (x,y).")
+            
+            point_coords = self.params["point_coords"]
+            try:
+                # convert to np.array for prompting sam
+                point_coords = np.array(point_coords)
+                if point_coords.ndim == 1:
+                    point_coords = np.expand_dims(point_coords,axis=0)
+                if point_coords.shape[1] !=2:
+                    raise ValueError("point in point_coords must have two values (x,y)")
+
+            except Exception as e:
+                ValueError(f"Invalid format for point_coords: {e}")
+            # Allow convert proper format
+            self.params["point_coords"] = point_coords
+                
+
+        # TODO: BBOX PROPER FORMAT FOR SAM 2 PROMPTING
+        elif self.prompt_type == "bbox":
+            if "bbox_coords" not in self.params or not isinstance(self.params["bbox_coords"],tuple) or len(self.params["bbox_coords"])!=4:
+                raise ValueError("For sam2 prompt 'bbox', 'bbox_coords' must be provided as a tuple (x1,y1,x2,y2).")
+        
+        elif self.prompt_type == "mask":
+            raise NotImplementedError("Not implemented yet and probably will not be used")
+
+    @property 
+    def prompt_type(self):
+        return self._prompt_type
+
+    @prompt_type.setter
+    def prompt_type(self, selected_prompt_type):
+        if selected_prompt_type not in self.valid_prompt_types:
+            raise ValueError(f"Invalid prompt type for SAM2! Valid promt types are: {self.valid_prompt_types}")
+        self._prompt_type = selected_prompt_type
+
+
+
+def run(cfg, sam2_prompt: Sam2PromptType) -> None:
     global user_caption, fps_print_active
     if_init = False
     
@@ -86,41 +135,59 @@ def run(cfg) -> None:
                 if not if_init:
                     sam2_predictor.load_first_frame(left_image_rgb)
                     ann_obj_id = 1  # Reset object ID counter for new object
-                    with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
-                        detections = grounding_dino_model.predict_with_classes(
-                            image=left_image_rgb,
-                            classes=[user_caption],
-                            box_threshold=cfg.grounding_dino.box_threshold,
-                            text_threshold=cfg.grounding_dino.text_threshold
-                        )
 
-                    if not detections or len(detections.xyxy) == 0:
-                        warnings.warn(f"No detections found for '{user_caption}'. The current tracked object is '{user_caption}'. Consider changing it.")
-                        # continue  # Skip the rest of the loop and go to the next frame
-                    else:
-                        detections = apply_nms(detections, cfg.grounding_dino.nms_threshold)
+                    if sam2_prompt.prompt_type == "g_dino_bbox":
 
-                        for box in detections.xyxy:
-                            x1, y1, x2, y2 = map(int, box)
-                            cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                            input_boxes = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
-                            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
-                                frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=input_boxes
+                        with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
+                            detections = grounding_dino_model.predict_with_classes(
+                                image=left_image_rgb,
+                                classes=[user_caption],
+                                box_threshold=cfg.grounding_dino.box_threshold,
+                                text_threshold=cfg.grounding_dino.text_threshold
                             )
+
+                        if not detections or len(detections.xyxy) == 0:
+                            warnings.warn(f"No detections found for '{user_caption}'. The current tracked object is '{user_caption}'. Consider changing it.")
+                            # continue  # Skip the rest of the loop and go to the next frame
+                        else:
+                            detections = apply_nms(detections, cfg.grounding_dino.nms_threshold)
+
+                            for box in detections.xyxy:
+                                x1, y1, x2, y2 = map(int, box)
+                                cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                                input_boxes = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
+                                _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
+                                    frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=input_boxes
+                                )
+                                ann_obj_id += 1
+
+                    elif sam2_prompt.prompt_type == "point":
+                        # NOTE: if using points you NEED a label. Label = 1 is foreground point, label = 0 is backgroiund point. 
+                        # We will probanly only need foreground points
+                        point_coords = sam2_prompt.params["point_coords"]
+                        label = np.array([1])
+                        with torch.inference_mode():
+                            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
+                                    frame_idx=ann_frame_idx, obj_id=ann_obj_id, points = point_coords, labels = label
+                                )
                             ann_obj_id += 1
 
-                        all_mask = process_masks(out_obj_ids, out_mask_logits, height, width)
-                        mask_colored = np.zeros_like(left_image_rgb)
-                        mask_colored[:, :, 1] = all_mask
-                        left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
-                        if_init = True  # Re-initialization done, start tracking
-                        
-                         # Apply mask-guided filtering to the depth map
-                        # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
-                        refined_depth_map = refine_depth_with_preprocessing(depth_map, left_image_rgb, all_mask)                        
-                        cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
-                        ann_frame_idx+=1
+                    # elif sam2_prompt.prompt_type == "bbox":
+                    #     bbox_coords = sam2_prompt
+
+
+                    all_mask = process_masks(out_obj_ids, out_mask_logits, height, width)
+                    mask_colored = np.zeros_like(left_image_rgb)
+                    mask_colored[:, :, 1] = all_mask
+                    left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
+                    if_init = True  # Re-initialization done, start tracking
+                    
+                        # Apply mask-guided filtering to the depth map
+                    # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
+                    refined_depth_map = refine_depth_with_postprocessing(depth_map, left_image_rgb, all_mask)                        
+                    cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
+                    ann_frame_idx+=1
                 else:
                     # Continue tracking with the current object
                     out_obj_ids, out_mask_logits = sam2_predictor.track(left_image_rgb)
@@ -129,7 +196,7 @@ def run(cfg) -> None:
                     mask_colored[:, :, 1] = all_mask
                     left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
                     # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
-                    refined_depth_map = refine_depth_with_preprocessing(depth_map, left_image_rgb, all_mask)                    
+                    refined_depth_map = refine_depth_with_postprocessing(depth_map, left_image_rgb, all_mask)                    
                     cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
                     
                     ann_frame_idx+=1
@@ -157,4 +224,8 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        run(cfg)
+
+        sam2_prompt = Sam2PromptType('point', point_coords = (300,200))
+        # sam2_prompt = Sam2PromptType('g_dino_bbox')
+
+        run(cfg, sam2_prompt=sam2_prompt)

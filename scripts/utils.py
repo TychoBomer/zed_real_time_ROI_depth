@@ -138,7 +138,7 @@ def inpaint_depth_map(depth_map, inpaint_radius=3):
     inpainted_depth_map = cv2.inpaint(depth_map, mask, inpaint_radius, cv2.INPAINT_TELEA)
     return inpainted_depth_map
 
-def refine_depth_with_preprocessing(depth_map, left_image, mask, lmbda=8000, sigma=1.5, inpaint_radius=3):
+def refine_depth_with_postprocessing(depth_map, left_image, mask, lmbda=8000, sigma=1.5, inpaint_radius=3):
     """
     Refine depth map by combining inpainting, WLS filtering, and mask-guided blending.
 

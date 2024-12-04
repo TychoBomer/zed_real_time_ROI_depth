@@ -3,9 +3,13 @@
 __pycache__/
 *-checkpoint.ipynb
 .venv
+.venv_zed
 *.egg*
 build/*
 _C.*
 outputs/*
 checkpoints/*.pt
 GroundingDINO/weights/*.pth
+GroundingDINO/
+*.log*
+*.whl*
