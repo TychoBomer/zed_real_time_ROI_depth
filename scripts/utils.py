@@ -9,6 +9,68 @@ from GroundingDINO.groundingdino.util.inference import Model
 from sam2.build_sam import build_sam2_camera_predictor
 import queue
 
+
+
+
+class Sam2PromptType:
+    valid_prompt_types = {"g_dino_bbox", "bbox", "point", "mask"} # all types SAM2 could handle
+
+    def __init__(self, prompt_type, **kwargs) -> None:
+        self._prompt_type = None
+        self.prompt_type = prompt_type # attempts the set function @prompt_type.setter
+        self.params = kwargs
+        self.validate_prompt()
+
+    def validate_prompt(self)->None:
+        if self.prompt_type == "point":
+            if "point_coords" not in self.params or not isinstance(self.params["point_coords"], tuple) or len(self.params["point_coords"])!=2:
+                raise ValueError("For sam2 prompt 'point', 'point_coords' must be provided as a tuple (x,y).")
+            
+            point_coords = self.params["point_coords"]
+            try:
+                # convert to np.array for prompting sam
+                point_coords = np.array(point_coords)
+                if point_coords.ndim == 1:
+                    point_coords = np.expand_dims(point_coords,axis=0)
+                if point_coords.shape[1] !=2:
+                    raise ValueError("point in point_coords must have two values (x,y)")
+
+            except Exception as e:
+                ValueError(f"Invalid format for point_coords: {e}")
+            # Allow convert proper format
+            self.params["point_coords"] = point_coords
+                
+
+        elif self.prompt_type == "bbox":
+            if "bbox_coords" not in self.params or not isinstance(self.params["bbox_coords"], tuple) or len(self.params["bbox_coords"]) != 4:
+                raise ValueError("For sam2 prompt 'bbox', 'bbox_coords' must be provided as a tuple (x1, y1, x2, y2).")
+
+            try:
+                # Ensure coordinates are in xyxy format and valid
+                x1, y1, x2, y2 = self.params["bbox_coords"]
+                if not (x1 < x2 and y1 < y2):
+                    raise ValueError(f"Invalid bbox coordinates: {self.params['bbox_coords']}. Ensure (x1, y1, x2, y2) with x1 < x2 and y1 < y2.")
+                # Set proper format bbox_coords
+                self.params["bbox_coords"] = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
+            
+            except Exception as e:
+                raise ValueError(f'Invalid format for bbox_coords: {e}')
+
+                
+        elif self.prompt_type == "mask":
+            raise NotImplementedError("Not implemented yet and probably will not be used")
+
+    @property 
+    def prompt_type(self):
+        return self._prompt_type
+
+    @prompt_type.setter
+    def prompt_type(self, selected_prompt_type):
+        if selected_prompt_type not in self.valid_prompt_types:
+            raise ValueError(f"Invalid prompt type for SAM2! Valid promt types are: {self.valid_prompt_types}")
+        self._prompt_type = selected_prompt_type
+
+
 def build_models(cfg) -> Tuple[nn.Module, Model]:
     """
     Builds and returns the SAM2 camera predictor and GroundingDINO models.

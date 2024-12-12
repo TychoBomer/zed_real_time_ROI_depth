@@ -23,6 +23,7 @@ torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
 from wrappers.pyzed_wrapper import pyzed_wrapper as pw
 from utils import process_masks, apply_nms, build_models, mask_guided_filter, update_caption, refine_depth_with_postprocessing
+from utils import Sam2PromptType
 
 # External input queue for queued caption inputs
 caption_queue = queue.Queue()
@@ -34,53 +35,6 @@ caption_thread = threading.Thread(target=update_caption, args=(caption_queue, us
 caption_thread.daemon = True
 caption_thread.start()
 
-
-class Sam2PromptType:
-    valid_prompt_types = {"g_dino_bbox", "bbox", "point", "mask"} # all types SAM2 could handle
-
-    def __init__(self, prompt_type, **kwargs) -> None:
-        self._prompt_type = None
-        self.prompt_type = prompt_type # attempts the set function @prompt_type.setter
-        self.params = kwargs
-        self.validate()
-
-    def validate(self)->None:
-        if self.prompt_type == "point":
-            if "point_coords" not in self.params or not isinstance(self.params["point_coords"], tuple) or len(self.params["point_coords"])!=2:
-                raise ValueError("For sam2 prompt 'point', 'point_coords' must be provided as a tuple (x,y).")
-            
-            point_coords = self.params["point_coords"]
-            try:
-                # convert to np.array for prompting sam
-                point_coords = np.array(point_coords)
-                if point_coords.ndim == 1:
-                    point_coords = np.expand_dims(point_coords,axis=0)
-                if point_coords.shape[1] !=2:
-                    raise ValueError("point in point_coords must have two values (x,y)")
-
-            except Exception as e:
-                ValueError(f"Invalid format for point_coords: {e}")
-            # Allow convert proper format
-            self.params["point_coords"] = point_coords
-                
-
-        # TODO: BBOX PROPER FORMAT FOR SAM 2 PROMPTING
-        elif self.prompt_type == "bbox":
-            if "bbox_coords" not in self.params or not isinstance(self.params["bbox_coords"],tuple) or len(self.params["bbox_coords"])!=4:
-                raise ValueError("For sam2 prompt 'bbox', 'bbox_coords' must be provided as a tuple (x1,y1,x2,y2).")
-        
-        elif self.prompt_type == "mask":
-            raise NotImplementedError("Not implemented yet and probably will not be used")
-
-    @property 
-    def prompt_type(self):
-        return self._prompt_type
-
-    @prompt_type.setter
-    def prompt_type(self, selected_prompt_type):
-        if selected_prompt_type not in self.valid_prompt_types:
-            raise ValueError(f"Invalid prompt type for SAM2! Valid promt types are: {self.valid_prompt_types}")
-        self._prompt_type = selected_prompt_type
 
 
 
@@ -136,6 +90,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                     sam2_predictor.load_first_frame(left_image_rgb)
                     ann_obj_id = 1  # Reset object ID counter for new object
 
+                    #* Use GroundingDINO box(es) as initial prompt
                     if sam2_prompt.prompt_type == "g_dino_bbox":
 
                         with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
@@ -162,6 +117,8 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                                 )
                                 ann_obj_id += 1
 
+
+                    #* Use point(s) as initial prompt
                     elif sam2_prompt.prompt_type == "point":
                         # NOTE: if using points you NEED a label. Label = 1 is foreground point, label = 0 is backgroiund point. 
                         # We will probanly only need foreground points
@@ -173,8 +130,19 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                                 )
                             ann_obj_id += 1
 
-                    # elif sam2_prompt.prompt_type == "bbox":
-                    #     bbox_coords = sam2_prompt
+
+                    #* Use pre defined box(es) as initial prompt
+                    elif sam2_prompt.prompt_type == "bbox":
+                        bbox_coords = sam2_prompt.params["bbox_coords"]
+                        x1, y1, x2, y2 = map(int, bbox_coords.flatten())
+                        cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+
+                        with torch.inference_mode():
+                            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
+                                frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=bbox_coords
+                            )
+                            ann_obj_id += 1
 
 
                     all_mask = process_masks(out_obj_ids, out_mask_logits, height, width)
@@ -209,6 +177,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 print(f"\rCurrent FPS: {1 / (te - ts):.2f}", end="")
 
             cv2.imwrite(os.path.join(output_folder, 'test.png'), left_image_rgb)
+            pass
 
     except Exception as e:
         print(f"An error occurred: {e}")
@@ -223,9 +192,10 @@ if __name__ == "__main__":
         GlobalHydra.instance().clear()
 
     with initialize(config_path="../configurations"):
-        cfg = compose(config_name="sam2_zed_small")
-
-        sam2_prompt = Sam2PromptType('point', point_coords = (300,200))
+        cfg = compose(config_name="sam2_zed_small")\
+        
+        sam2_prompt = Sam2PromptType('bbox', bbox_coords = (250, 150, 500, 250))
+        # sam2_prompt = Sam2PromptType('point', point_coords = (300,200))
         # sam2_prompt = Sam2PromptType('g_dino_bbox')
 
         run(cfg, sam2_prompt=sam2_prompt)
