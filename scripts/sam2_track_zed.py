@@ -123,6 +123,9 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                         # NOTE: if using points you NEED a label. Label = 1 is foreground point, label = 0 is backgroiund point. 
                         # We will probanly only need foreground points
                         point_coords = sam2_prompt.params["point_coords"]
+                        x ,y =map(int, point_coords.flatten())
+                        cv2.circle(left_image_rgb, (x, y), 3, (255,0,0), 2)
+
                         label = np.array([1])
                         with torch.inference_mode():
                             _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
@@ -194,8 +197,8 @@ if __name__ == "__main__":
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")\
         
-        sam2_prompt = Sam2PromptType('bbox', bbox_coords = (250, 150, 500, 250))
-        # sam2_prompt = Sam2PromptType('point', point_coords = (300,200))
+        # sam2_prompt = Sam2PromptType('bbox', bbox_coords = (250, 150, 500, 250))
+        sam2_prompt = Sam2PromptType('point', point_coords = (390,200))
         # sam2_prompt = Sam2PromptType('g_dino_bbox')
 
         run(cfg, sam2_prompt=sam2_prompt)
