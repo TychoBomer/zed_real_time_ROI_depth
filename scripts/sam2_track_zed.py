@@ -2,14 +2,16 @@ import warnings
 import os,sys
 import torch
 import numpy as np
+import random
 import cv2
-import numpy as np
 import time
 from hydra import initialize, compose
 from hydra.core.global_hydra import GlobalHydra
+import imageio
 
 import threading
 import queue
+import seaborn as sns
 
 sys.path.insert(0, os.getcwd())
 
@@ -22,37 +24,72 @@ torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
 
 from wrappers.pyzed_wrapper import pyzed_wrapper as pw
-from utils import process_masks, apply_nms, build_models, mask_guided_filter, update_caption, refine_depth_with_preprocessing
+from scripts.utils.utils import Sam2PromptType, process_masks, apply_nms, build_models, update_caption
+from scripts.utils.depth_utils import (
+    mask_guided_filter,
+    refine_depth_with_postprocessing,
+    refine_depth_with_wjbf_and_sdcf, 
+    refine_depth_with_cross_bilateral,
+    refine_depth_with_plane_fitting,
+    refine_depth_with_mhmf,
+    refine_depth_with_hole_filling
+    )
+from scripts.utils.depth_utils import visualize_depth, to_numpy_func, resize_to_multiple
 
-# External input queue for queued caption inputs
-caption_queue = queue.Queue()
-user_caption = "keyboard"
-fps_print_active = True
-
-# Start the input handler in a separate thread
-caption_thread = threading.Thread(target=update_caption, args=(caption_queue, user_caption))
-caption_thread.daemon = True
-caption_thread.start()
+from utils.logger import Log
 
 
-def run(cfg) -> None:
-    global user_caption, fps_print_active
-    if_init = False
+
+def run(cfg, sam2_prompt: Sam2PromptType) -> None:
+
+    Log.info("Initializing the pipeline...", tag="pipeline_init")
+    if sam2_prompt.prompt_type == "g_dino_bbox":
+        # Setup the caption queue
+        caption_queue = queue.Queue()
+        user_caption = sam2_prompt.user_caption
+        caption_thread = threading.Thread(target=update_caption, args=(caption_queue, user_caption))
+        caption_thread.daemon = True
+        caption_thread.start()
+    else:
+        caption_queue = None 
+
     
+    num_colors = 10  
+    palette = sns.color_palette("hsv", num_colors)
+    colors = [(int(r * 255), int(g * 255), int(b * 255)) for r, g, b in palette]
+
+    # Simple save folder for output images
     output_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'output_img')
     os.makedirs(output_folder, exist_ok=True)
 
-    sam2_predictor, grounding_dino_model = build_models(cfg)
-
+    # Build needed models
+    Log.info("Building models...", tag="building_models")
+    try:
+        sam2_predictor, grounding_dino_model = build_models(cfg)
+        Log.info("Models successfully built and loaded.", tag="model_building")
+    except Exception as e:
+        Log.error(f"Failed to build models: {e}", tag="model_build_error")
+        return
+    
+    # Use Nakama Pyzed Wrapper for acces to ZED camera
+    Log.info("Initializing ZED camera...", tag="zed_camera_init")
     wrapper = pw.Wrapper(cfg.camera.connection_type)
-    wrapper.open_input_source()
+    try:
+        wrapper.open_input_source()
+        Log.info("ZED camera initialized.", tag="camera_init")
+    except Exception as e:
+        Log.error(f"Failed to initialize ZED camera: {e}", tag="camera_init_error")
+        return
 
     l_intr, r_intr = wrapper.get_intrinsic()
     K_l = np.array([[l_intr.fx, 0, l_intr.cx],
                     [0, l_intr.fy, l_intr.cy],
                     [0, 0, 1]])
-
+    
     wrapper.start_stream()
+    Log.info('Camera stream started.', tag = "camera_stream")
+
+    if_init = False
     ann_frame_idx = 0
     ann_obj_id = 1
 
@@ -64,18 +101,30 @@ def run(cfg) -> None:
                 # Extract from ZED camera
                 left_image = wrapper.output_image
                 depth_map = wrapper.output_measure
+                
+                depth_resized = resize_to_multiple(depth_map, 14)
+                depth_tensor = torch.tensor(depth_resized, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to('cuda')
+                
+                prompt_depth = to_numpy_func(depth_tensor)
+                prompt_depth_vis = visualize_depth(prompt_depth)
+                imageio.imwrite(os.path.join(output_folder, 'norm_depth_heatmap.jpg'), prompt_depth_vis)
+
 
                 norm_depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                 cv2.imwrite(os.path.join(output_folder, 'norm_depth.png'), norm_depth_map)
+
+                heatmap_depth_map = visualize_depth(norm_depth_map, cmap='Spectral')
+                cv2.imwrite(os.path.join(output_folder, 'norm_depth_heatmap.jpg'), heatmap_depth_map)
+
 
                 left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
                 height, width, _ = left_image_rgb.shape
                 cv2.imwrite(os.path.join(output_folder, 'left_img_og.png'), left_image_rgb)
 
                 # Check if there is a new caption in the queue
-                if not caption_queue.empty():
-                    user_caption = caption_queue.get()
-                    print(f"\nUpdated object to detect: {user_caption}")
+                if caption_queue and not caption_queue.empty():
+                    user_caption = Sam2PromptType.format_user_caption(caption_queue.get())
+                    Log.info(f"Updated object to detect: {user_caption}", tag="caption_update")
                     # Force re-initialization with new object
                     if_init = False  
                     ann_frame_idx = 0
@@ -84,69 +133,136 @@ def run(cfg) -> None:
 
                 # Re-initialize with new object detection if a new caption is provided
                 if not if_init:
+                    previous_depth = norm_depth_map
                     sam2_predictor.load_first_frame(left_image_rgb)
                     ann_obj_id = 1  # Reset object ID counter for new object
-                    with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
-                        detections = grounding_dino_model.predict_with_classes(
-                            image=left_image_rgb,
-                            classes=[user_caption],
-                            box_threshold=cfg.grounding_dino.box_threshold,
-                            text_threshold=cfg.grounding_dino.text_threshold
-                        )
 
-                    if not detections or len(detections.xyxy) == 0:
-                        warnings.warn(f"No detections found for '{user_caption}'. The current tracked object is '{user_caption}'. Consider changing it.")
-                        # continue  # Skip the rest of the loop and go to the next frame
-                    else:
-                        detections = apply_nms(detections, cfg.grounding_dino.nms_threshold)
+                    #* Use GroundingDINO box(es) as initial prompt
+                    if sam2_prompt.prompt_type == "g_dino_bbox":
 
-                        for box in detections.xyxy:
-                            x1, y1, x2, y2 = map(int, box)
-                            cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                            input_boxes = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
-                            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
-                                frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=input_boxes
+                        with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
+                            detections = grounding_dino_model.predict_with_classes(
+                                image=left_image_rgb,
+                                classes=[user_caption],
+                                box_threshold=cfg.grounding_dino.box_threshold,
+                                text_threshold=cfg.grounding_dino.text_threshold
                             )
-                            ann_obj_id += 1
 
-                        all_mask = process_masks(out_obj_ids, out_mask_logits, height, width)
-                        mask_colored = np.zeros_like(left_image_rgb)
-                        mask_colored[:, :, 1] = all_mask
-                        left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
-                        if_init = True  # Re-initialization done, start tracking
+                        if not detections or len(detections.xyxy) == 0:
+                            Log.warn(f"No detections found for '{user_caption}', Consider changing it.")
+                            cv2.imwrite(os.path.join(output_folder, 'test.png'), left_image_rgb)
+                            continue  # Skip the rest of the loop and go to the next frame
+                        else:
+                            Log.info(f"Detections found for '{user_caption}'")
+                            detections = apply_nms(detections, cfg.grounding_dino.nms_threshold)
+
+                            for box in detections.xyxy:
+                                x1, y1, x2, y2 = map(int, box)
+                                cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                                input_boxes = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
+                                _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
+                                    frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=input_boxes
+                                )
+                                ann_obj_id += 1
+                            if_init=True
+
+
+                    #* Use point(s) as initial prompt
+                    elif sam2_prompt.prompt_type == "point":
+                        # NOTE: if using points you NEED a label. Label = 1 is foreground point, label = 0 is backgroiund point. 
+                        # We will probanly only need foreground points
+                        point_coords = sam2_prompt.params["point_coords"]
+                        labels = np.array(sam2_prompt.params["labels"])  
+                        for point, label in zip(point_coords, labels):
+                            x ,y =map(int, point)
+                            color = (0, 255, 0) if label == 1 else (0, 0, 255)
+                            cv2.circle(left_image_rgb, (x, y), 3, color, 2)
+
+                        with torch.inference_mode():
+                            _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
+                                    frame_idx=ann_frame_idx, obj_id=ann_obj_id, points = point_coords, labels = labels
+                                )
+                            # ann_obj_id += len(point_coords)
+                            ann_obj_id += 1
+                        if_init=True
                         
-                         # Apply mask-guided filtering to the depth map
-                        # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
-                        refined_depth_map = refine_depth_with_preprocessing(depth_map, left_image_rgb, all_mask)                        
-                        cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
-                        ann_frame_idx+=1
+
+                    #* Use pre defined box(es) as initial prompt
+                    elif sam2_prompt.prompt_type == "bbox":
+                        bbox_coords = sam2_prompt.params["bbox_coords"]
+                        for idx, bbox in enumerate(bbox_coords):
+                            x1, y1, x2, y2 = map(int, bbox)
+                            color = [random.randint(0, 255) for _ in range(3)]
+                            cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), color, 2)
+
+
+                        with torch.inference_mode():
+                            for bbox in bbox_coords: 
+                                x1, y1, x2, y2 = map(int, bbox)
+                                input_bbox = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
+                                _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
+                                    frame_idx=ann_frame_idx, obj_id=ann_obj_id, bbox=input_bbox
+                                )
+                                ann_obj_id += 1 
+                        if_init=True
+
+                    
                 else:
                     # Continue tracking with the current object
                     out_obj_ids, out_mask_logits = sam2_predictor.track(left_image_rgb)
-                    all_mask = process_masks(out_obj_ids, out_mask_logits, height, width)
-                    mask_colored = np.zeros_like(left_image_rgb)
-                    mask_colored[:, :, 1] = all_mask
-                    left_image_rgb = cv2.addWeighted(left_image_rgb, 1, mask_colored, 0.5, 0)
-                    # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, all_mask)
-                    refined_depth_map = refine_depth_with_preprocessing(depth_map, left_image_rgb, all_mask)                    
-                    cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
-                    
-                    ann_frame_idx+=1
+
+
+                #* Mask processing
+                all_mask = np.zeros_like(left_image_rgb, dtype=np.uint8)
+                obj_masks = process_masks(out_obj_ids, out_mask_logits)
+                for obj_id, mask in obj_masks.items():
+                    color = colors[obj_id%len(colors)+1]
+                    colored_mask = np.zeros_like(left_image_rgb, dtype=np.uint8)
+                    for c in range(3):
+                        colored_mask[:, :, c] = mask[:, :, 0] * color[c]
+                    all_mask = cv2.add(all_mask,colored_mask)
+
+                
+                left_image_rgb = cv2.addWeighted(left_image_rgb, 1, all_mask, 0.5, 0)
+                
+                # *Refine the depth mask using masks
+                # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, obj_masks)
+                # refined_depth_map = refine_depth_with_postprocessing(depth_map, left_image_rgb, obj_masks)     
+                # refined_depth_map = refine_depth_with_wjbf_and_sdcf(depth_map, obj_masks, guidance_img, sigma_spatial=15, sigma_range=30)      
+                # refined_depth_map = refine_depth_with_plane_fitting(depth_map, obj_masks)
+                # refined_depth_map = refine_depth_with_mhmf(depth_map, obj_masks, depth_threshold=(1, 255))            
+                guidance_img = np.sum([mask for mask in obj_masks.values()], axis=0).astype(np.uint8)
+                refined_depth_map = refine_depth_with_hole_filling(
+                current_depth=norm_depth_map,
+                previous_depth=previous_depth,
+                obj_masks=obj_masks,
+                guidance_img=guidance_img,
+                max_distance=5,
+                alpha=0.5,
+                kernel_size=5
+                )
+                
+                
+                refined_depth_map = cv2.normalize(refined_depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                previous_depth = norm_depth_map
+                cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
+                ann_frame_idx+=1
 
             # ann_frame_idx += 1
             te = time.time()
 
-            # Print FPS without interrupting user input
-            if fps_print_active:
-                print(f"\rCurrent FPS: {1 / (te - ts):.2f}", end="")
+    
+            print(f"\rCurrent FPS: {1 / (te - ts):.2f}", end="")
 
             cv2.imwrite(os.path.join(output_folder, 'test.png'), left_image_rgb)
+            pass
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        Log.error(f"An error occurred during execution: {e}", tag="runtime_error")
 
     finally:
+        Log.info("Shutting down and closing stream...", tag ='Close_stream')
         wrapper.stop_stream()
         wrapper.close_input_source()
 
@@ -157,4 +273,14 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        run(cfg)
+        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='keyboard')
+        
+
+        # point_coords = [(390, 200)]
+        # labels = [1]  # 1 = foreground, 0 = background
+        # sam2_prompt = Sam2PromptType('point', point_coords = point_coords, labels=labels)
+
+        # bbox_coords = [(50, 50, 150, 150), (200, 200, 300, 300)] #! NOTE: 3+ boxes make it really inaccurate
+        # sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
+
+        run(cfg, sam2_prompt=sam2_prompt)

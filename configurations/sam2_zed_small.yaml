@@ -5,11 +5,13 @@ grounding_dino:
   box_threshold: 0.65
   text_threshold: 0.25
   nms_threshold: 0.6
-  config_path: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-  checkpoint_path: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/GroundingDINO/weights/groundingdino_swint_ogc.pth"
+  # config_path: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+  config_path: "/home/nakamalab/Documents/zed_real_time_ROI_depth/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+  # checkpoint_path: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/GroundingDINO/weights/groundingdino_swint_ogc.pth"
+  checkpoint_path: "/home/nakamalab/Documents/zed_real_time_ROI_depth/GroundingDINO/weights/groundingdino_swint_ogc.pth"
 
 sam2:
-  checkpoint: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/checkpoints/sam2_hiera_small.pt"
+  checkpoint: "/home/nakamalab/Documents/zed_real_time_ROI_depth/checkpoints/sam2_hiera_small.pt"
   model_cfg: "sam2_configs/sam2_hiera_s.yaml"
 
 camera:
