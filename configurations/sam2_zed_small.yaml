@@ -17,6 +17,13 @@ sam2:
 camera:
   connection_type: "id"
 
+depth:
+  refine_depth: true
+
+results:
+  output_dir: "output"
+  
+
 
 
 

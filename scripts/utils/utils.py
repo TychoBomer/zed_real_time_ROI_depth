@@ -1,11 +1,15 @@
 import time
 import torch
+import cv2
 import numpy as np
 import torch.nn as nn
 from typing import Tuple
 from GroundingDINO.groundingdino.util.inference import Model
 from sam2.build_sam import build_sam2_camera_predictor
 import queue
+import seaborn as sns
+import os
+
 
 from concurrent.futures import ThreadPoolExecutor
 from deprecated import deprecated
@@ -218,3 +222,19 @@ def fps_decorator(func):
         print(f"\rCurrent FPS: {fps:.2f}", end="")
         return result
     return wrapper
+
+def create_mask_color_palette(n_colors:int=10, palette_type:str ='hsv') -> np.array:
+    palette = sns.color_palette(palette_type, n_colors)
+    return [(int(r * 255), int(g * 255), int(b * 255)) for r, g, b in palette]
+
+def setup_output_folder(folder_name: str) -> str:
+    #* utils.py nested two time so root is two above
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+    if os.path.isabs(folder_name):
+        output_folder = folder_name
+    else:
+        output_folder = os.path.join(project_root, folder_name)
+    os.makedirs(output_folder, exist_ok=True)
+    return output_folder
+    
+

@@ -1,83 +1,133 @@
-# segment-anything-2 real-time
-Run all released versions of segment-anything-2 (SAM2) in combination with the Stereolabs ZED-Stereocamera using the associated python API released in ZED SDK.
+# Stereovision Depth to ROIs using Segmentation
 
-More information of the Python Api on the Stereolabs website: https://www.stereolabs.com/docs/app-development/python/install
+This project combines **Segment-Anything-2 (SAM2)** with the **Stereolabs ZED-Stereocamera**, leveraging the Python API provided by the ZED SDK to extract depth information and segment Regions of Interest (ROIs) in real-time.
 
+Optional integration with **GroundingDINO** allows for the use of text prompts to generate bounding boxes as input for SAM2, enhancing segmentation flexibility.
 
-## Current outline
-Different models (and dependencies) are needed to get the project working.
-- - -
+For more details about the ZED Python API, visit the [Stereolabs documentation](https://www.stereolabs.com/docs/app-development/python/install).
 
-### Nakama Pyzed Wrapper for the ZED camera
+---
 
-#### Installation
-For installation of the wrapper we need to have the ZED SDK configured (see details here: https://www.stereolabs.com/en-nl/developers/release)
+## Overview
 
-This project has been tested for the ZED SDK v4.1. This version integrated the AI-mode for depth estimation. Note that CUDA 12 is required for usage of this SDK, but the installer will prompt you if CUDA 12 is not set up correctly.
+This project requires the integration of multiple models and dependencies to achieve real-time segmentation and depth estimation. Below is an outline of the components and their purposes:
 
-Next you can either run the <em><strong>get_python_api.py</strong></em> globally: https://www.stereolabs.com/docs/app-development/python/install
+- **SAM2**: Instance segmentation using flexible prompts for guidance.
+- **GroundingDINO**: Text-based object detection to generate bounding box prompts for SAM2.
+- **Nakama Pyzed Wrapper**: Streamlined interaction with the ZED stereocamera.
 
-Or Install it within a virtual environment: https://www.stereolabs.com/docs/app-development/python/virtual_env
+---
 
-After that the wrapper package can be installed as a package, or cloned into your project
-For more information follow: https://bitbucket.org/ctw-bw/nakama_pyzed_wrapper/src/master/
+## Installation
 
-- - -
+### Prerequisites: Setting up CUDA
 
-### Grounding DINO
-Grounding dino is used to estimate inital boundingboxes in the first frame.
-#### Installation
-step 1:
-Set specific path to cuda used to build the model
+**Note:**
+- For the ZED camera, CUDA 12.1 is required to use Python SDK 4.1. The SDK installer handles this automatically.
+- For other models, any CUDA version ≥ 11.3 can be used.
+
+After setting up CUDA, ensure the correct version is being used by configuring the `CUDA_HOME` environment variable:
+
 ```bash
 export CUDA_HOME=/path/to/desired_cuda_version
 ```
-Step 2: Change the current directory to the GroundingDINO folder.
+
+To verify the CUDA version:
+
 ```bash
-cd GroundingDINO/
+which nvcc
 ```
 
-step 3: Install the required dependencies in the current directory.
+The output should point to the desired CUDA version, e.g., `/usr/local/cuda-12.6/bin/nvcc`. Use the corresponding path to set `CUDA_HOME`. Confirm the setup:
+
 ```bash
-pip install -e .
+echo $CUDA_HOME
 ```
 
-step 4: Download pre-trained model weights.
-``` bash
-mkdir weights
-cd weights
-wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
-cd ..
-```
-- - -
+---
 
 ### SAM2
+
+**Note:** It is recommended to install SAM2 before GroundingDINO, as SAM2's installer includes required dependencies for GroundingDINO.
+
 #### Installation
-step 1: install requirements
-```bash
-pip install -e .
-```
 
-step2: Download Checkpoints and configurations
+1. Install requirements:
 
-Then, we need to download a model checkpoint.
-```bash
-cd checkpoints
-./download_ckpts.sh
-```
+   ```bash
+   pip install -e .
+   ```
 
+2. Download checkpoints and configurations:
 
-- - -
-### ZED-Camera prediction 
+   ```bash
+   cd checkpoints
+   ./download_ckpts.sh
+   ```
 
-The main code combining the current pipeline is placed in:
+---
+
+### GroundingDINO
+
+#### Installation
+
+1. Change to the `GroundingDINO` directory:
+
+   ```bash
+   cd GroundingDINO/
+   ```
+
+2. Install required dependencies:
+
+   ```bash
+   pip install -e .
+   ```
+
+3. Download pre-trained model weights:
+
+   ```bash
+   mkdir weights
+   cd weights
+   wget -q https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
+   cd ..
+   ```
+
+---
+
+### Nakama Pyzed Wrapper for the ZED Camera
+
+#### Installation
+
+1. Install the ZED SDK (details [here](https://www.stereolabs.com/en-nl/developers/release)).
+
+   **Note:** This project has been tested with ZED SDK v4.1, which integrates the AI mode for depth estimation. The installer will prompt you to install CUDA 12 if it is not already configured.
+
+2. Install the ZED Python API:
+
+   - Globally:
+     [Python API Installation](https://www.stereolabs.com/docs/app-development/python/install)
+   - Within a virtual environment:
+     [Python API Virtual Env](https://www.stereolabs.com/docs/app-development/python/virtual_env)
+
+3. Install the Nakama Pyzed Wrapper as a package or clone it into your project:
+   [Nakama Pyzed Wrapper](https://bitbucket.org/ctw-bw/nakama_pyzed_wrapper/src/master/)
+
+---
+
+## ZED Camera Prediction
+
+The main pipeline code is located at:
+
 ```bash
 scripts/sam2_track_zed.py
 ```
 
-Configurations (.yaml) are placed in the <strong><em>configurations</strong></em> folder.
+### Configuration
 
-Configurations for the <strong><em>Nakama pyzed wrapper</strong></em> are placed in:
-```bash
-scripts/pyzed_wrapper/wrapper_settings.py
-```
+1. General configurations are in the `configurations` folder. Update paths to match your machine setup.
+
+2. Nakama Pyzed Wrapper-specific settings are in:
+
+   ```bash
+   scripts/pyzed_wrapper/wrapper_settings.py
+   

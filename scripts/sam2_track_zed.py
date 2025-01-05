@@ -1,4 +1,3 @@
-import warnings
 import os,sys
 import torch
 import numpy as np
@@ -11,7 +10,6 @@ import imageio
 
 import threading
 import queue
-import seaborn as sns
 
 sys.path.insert(0, os.getcwd())
 
@@ -24,7 +22,7 @@ torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
 
 from wrappers.pyzed_wrapper import pyzed_wrapper as pw
-from scripts.utils.utils import Sam2PromptType, process_masks, apply_nms, build_models, update_caption
+from scripts.utils.utils import *
 from scripts.utils.depth_utils import (
     mask_guided_filter,
     refine_depth_with_postprocessing,
@@ -54,13 +52,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
         caption_queue = None 
 
     
-    num_colors = 10  
-    palette = sns.color_palette("hsv", num_colors)
-    colors = [(int(r * 255), int(g * 255), int(b * 255)) for r, g, b in palette]
 
-    # Simple save folder for output images
-    output_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'output_img')
-    os.makedirs(output_folder, exist_ok=True)
 
     # Build needed models
     Log.info("Building models...", tag="building_models")
@@ -86,6 +78,12 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                     [0, l_intr.fy, l_intr.cy],
                     [0, 0, 1]])
     
+
+    # Fixed color palette for sam mask ids
+    colors = create_mask_color_palette(10,'hsv')
+    # Simple save folder for output images
+    output_dir = setup_output_folder(cfg.results.output_dir)
+
     wrapper.start_stream()
     Log.info('Camera stream started.', tag = "camera_stream")
 
@@ -101,25 +99,27 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 # Extract from ZED camera
                 left_image = wrapper.output_image
                 depth_map = wrapper.output_measure
-                
+                norm_depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
                 depth_resized = resize_to_multiple(depth_map, 14)
                 depth_tensor = torch.tensor(depth_resized, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to('cuda')
                 
                 prompt_depth = to_numpy_func(depth_tensor)
-                prompt_depth_vis = visualize_depth(prompt_depth)
-                imageio.imwrite(os.path.join(output_folder, 'norm_depth_heatmap.jpg'), prompt_depth_vis)
+                prompt_depth_vis,depth_min, depth_max= visualize_depth(prompt_depth, ret_minmax=True)
+                prompt_depth_vis,depth_min, depth_max= visualize_depth(prompt_depth, ret_minmax=True, depth_min=depth_min, depth_max=depth_max)
+
+                imageio.imwrite(os.path.join(output_dir, 'norm_depth_heatmap.jpg'), prompt_depth_vis)
 
 
-                norm_depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-                cv2.imwrite(os.path.join(output_folder, 'norm_depth.png'), norm_depth_map)
+                cv2.imwrite(os.path.join(output_dir, 'norm_depth.png'), norm_depth_map)
 
                 heatmap_depth_map = visualize_depth(norm_depth_map, cmap='Spectral')
-                cv2.imwrite(os.path.join(output_folder, 'norm_depth_heatmap.jpg'), heatmap_depth_map)
+                cv2.imwrite(os.path.join(output_dir, 'norm_depth_heatmap.jpg'), heatmap_depth_map)
 
 
                 left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
                 height, width, _ = left_image_rgb.shape
-                cv2.imwrite(os.path.join(output_folder, 'left_img_og.png'), left_image_rgb)
+                cv2.imwrite(os.path.join(output_dir, 'left_img_og.png'), left_image_rgb)
 
                 # Check if there is a new caption in the queue
                 if caption_queue and not caption_queue.empty():
@@ -135,11 +135,10 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 if not if_init:
                     previous_depth = norm_depth_map
                     sam2_predictor.load_first_frame(left_image_rgb)
-                    ann_obj_id = 1  # Reset object ID counter for new object
+                    ann_obj_id = 1  # Reset object ID counter for new object if pipeline restarted
 
                     #* Use GroundingDINO box(es) as initial prompt
                     if sam2_prompt.prompt_type == "g_dino_bbox":
-
                         with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
                             detections = grounding_dino_model.predict_with_classes(
                                 image=left_image_rgb,
@@ -150,7 +149,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
 
                         if not detections or len(detections.xyxy) == 0:
                             Log.warn(f"No detections found for '{user_caption}', Consider changing it.")
-                            cv2.imwrite(os.path.join(output_folder, 'test.png'), left_image_rgb)
+                            cv2.imwrite(os.path.join(output_dir, 'test.png'), left_image_rgb)
                             continue  # Skip the rest of the loop and go to the next frame
                         else:
                             Log.info(f"Detections found for '{user_caption}'")
@@ -209,7 +208,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
 
                     
                 else:
-                    # Continue tracking with the current object
+                    #* Continue tracking with the current object
                     out_obj_ids, out_mask_logits = sam2_predictor.track(left_image_rgb)
 
 
@@ -227,26 +226,27 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 left_image_rgb = cv2.addWeighted(left_image_rgb, 1, all_mask, 0.5, 0)
                 
                 # *Refine the depth mask using masks
-                # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, obj_masks)
-                # refined_depth_map = refine_depth_with_postprocessing(depth_map, left_image_rgb, obj_masks)     
-                # refined_depth_map = refine_depth_with_wjbf_and_sdcf(depth_map, obj_masks, guidance_img, sigma_spatial=15, sigma_range=30)      
-                # refined_depth_map = refine_depth_with_plane_fitting(depth_map, obj_masks)
-                # refined_depth_map = refine_depth_with_mhmf(depth_map, obj_masks, depth_threshold=(1, 255))            
-                guidance_img = np.sum([mask for mask in obj_masks.values()], axis=0).astype(np.uint8)
-                refined_depth_map = refine_depth_with_hole_filling(
-                current_depth=norm_depth_map,
-                previous_depth=previous_depth,
-                obj_masks=obj_masks,
-                guidance_img=guidance_img,
-                max_distance=5,
-                alpha=0.5,
-                kernel_size=5
-                )
-                
-                
-                refined_depth_map = cv2.normalize(refined_depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-                previous_depth = norm_depth_map
-                cv2.imwrite(os.path.join(output_folder, 'refined_depth.png'), refined_depth_map)
+                if cfg.depth.refine_depth:
+                    # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, obj_masks)
+                    # refined_depth_map = refine_depth_with_postprocessing(depth_map, left_image_rgb, obj_masks)     
+                    # refined_depth_map = refine_depth_with_wjbf_and_sdcf(depth_map, obj_masks, guidance_img, sigma_spatial=15, sigma_range=30)      
+                    # refined_depth_map = refine_depth_with_plane_fitting(depth_map, obj_masks)
+                    # refined_depth_map = refine_depth_with_mhmf(depth_map, obj_masks, depth_threshold=(1, 255))            
+                    guidance_img = np.sum([mask for mask in obj_masks.values()], axis=0).astype(np.uint8)
+                    refined_depth_map = refine_depth_with_hole_filling(
+                    current_depth=norm_depth_map,
+                    previous_depth=previous_depth,
+                    obj_masks=obj_masks,
+                    guidance_img=guidance_img,
+                    max_distance=5,
+                    alpha=0.5,
+                    kernel_size=5
+                    )
+                    
+                    
+                    refined_depth_map = cv2.normalize(refined_depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                    previous_depth = norm_depth_map
+                    cv2.imwrite(os.path.join(output_dir, 'refined_depth.png'), refined_depth_map)
                 ann_frame_idx+=1
 
             # ann_frame_idx += 1
@@ -255,7 +255,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
     
             print(f"\rCurrent FPS: {1 / (te - ts):.2f}", end="")
 
-            cv2.imwrite(os.path.join(output_folder, 'test.png'), left_image_rgb)
+            cv2.imwrite(os.path.join(output_dir, 'test.png'), left_image_rgb)
             pass
 
     except Exception as e:
