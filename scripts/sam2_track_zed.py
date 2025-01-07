@@ -190,10 +190,10 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                     #* Use pre defined box(es) as initial prompt
                     elif sam2_prompt.prompt_type == "bbox":
                         bbox_coords = sam2_prompt.params["bbox_coords"]
-                        for idx, bbox in enumerate(bbox_coords):
+                        for box_id, bbox in enumerate(bbox_coords):
                             x1, y1, x2, y2 = map(int, bbox)
-                            color = [random.randint(0, 255) for _ in range(3)]
-                            cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), color, 2)
+                            color = colors[(box_id+1)%len(colors)+1]
+                            cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (color[0], color[2], color[1]) , 2)
 
 
                         with torch.inference_mode():
@@ -273,14 +273,15 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='keyboard')
+        # sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='apple')
         
 
         # point_coords = [(390, 200)]
         # labels = [1]  # 1 = foreground, 0 = background
         # sam2_prompt = Sam2PromptType('point', point_coords = point_coords, labels=labels)
 
+        bbox_coords = [(320, 120, 470, 280)]
         # bbox_coords = [(50, 50, 150, 150), (200, 200, 300, 300)] #! NOTE: 3+ boxes make it really inaccurate
-        # sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
+        sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
 
         run(cfg, sam2_prompt=sam2_prompt)
