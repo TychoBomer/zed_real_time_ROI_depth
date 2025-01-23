@@ -91,6 +91,15 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
     ann_frame_idx = 0
     ann_obj_id = 1
 
+
+
+    # Define the codec and create VideoWriter object
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter('/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/output/output.mp4', fourcc, 20, (1280, 720), True)
+    out2 = cv2.VideoWriter('/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/output/output_depth.mp4', fourcc, 20, (1280, 720), False)
+    
+    framecount = 0
+
     try:
         while True:
             ts = time.time()
@@ -99,27 +108,29 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 # Extract from ZED camera
                 left_image = wrapper.output_image
                 depth_map = wrapper.output_measure
+
+
                 norm_depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-                depth_resized = resize_to_multiple(depth_map, 14)
-                depth_tensor = torch.tensor(depth_resized, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to('cuda')
+                # depth_resized = resize_to_multiple(depth_map, 14)
+                # depth_tensor = torch.tensor(depth_resized, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to('cuda')
                 
-                prompt_depth = to_numpy_func(depth_tensor)
-                prompt_depth_vis,depth_min, depth_max= visualize_depth(prompt_depth, ret_minmax=True)
-                prompt_depth_vis,depth_min, depth_max= visualize_depth(prompt_depth, ret_minmax=True, depth_min=depth_min, depth_max=depth_max)
+                # prompt_depth = to_numpy_func(depth_tensor)
+                # prompt_depth_vis,depth_min, depth_max= visualize_depth(prompt_depth, ret_minmax=True)
+                # prompt_depth_vis,depth_min, depth_max= visualize_depth(prompt_depth, ret_minmax=True, depth_min=depth_min, depth_max=depth_max)
 
-                imageio.imwrite(os.path.join(output_dir, 'norm_depth_heatmap.jpg'), prompt_depth_vis)
+                # imageio.imwrite(os.path.join(output_dir, 'norm_depth_heatmap.jpg'), prompt_depth_vis)
 
 
                 cv2.imwrite(os.path.join(output_dir, 'norm_depth.png'), norm_depth_map)
 
-                heatmap_depth_map = visualize_depth(norm_depth_map, cmap='Spectral')
-                cv2.imwrite(os.path.join(output_dir, 'norm_depth_heatmap.jpg'), heatmap_depth_map)
+                # heatmap_depth_map = visualize_depth(norm_depth_map, cmap='Spectral')
+                # cv2.imwrite(os.path.join(output_dir, 'norm_depth_heatmap.jpg'), heatmap_depth_map)
 
 
                 left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
                 height, width, _ = left_image_rgb.shape
-                cv2.imwrite(os.path.join(output_dir, 'left_img_og.png'), left_image_rgb)
+                # cv2.imwrite(os.path.join(output_dir, 'left_img_og.png'), left_image_rgb)
 
                 # Check if there is a new caption in the queue
                 if caption_queue and not caption_queue.empty():
@@ -157,7 +168,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
 
                             for box in detections.xyxy:
                                 x1, y1, x2, y2 = map(int, box)
-                                cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                                # cv2.rectangle(left_image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                                 input_boxes = np.array([[x1, y1], [x2, y2]], dtype=np.float32)
                                 _, out_obj_ids, out_mask_logits = sam2_predictor.add_new_prompt(
@@ -224,28 +235,55 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
 
                 
                 left_image_rgb = cv2.addWeighted(left_image_rgb, 1, all_mask, 0.5, 0)
+                if framecount < 500:
+                    # left_image_rgb = np.array(left_image_rgb)
+                    # norm_depth_map = np.array(norm_depth_map)
+                    # matr = np.ones((1440,1280,4), dtype='uint8')
+                    # # stack = np.vstack((left_image, np.expand_dims(norm_depth_map,axis=2)))
+                    # matr[0:720,:,0:3] = left_image_rgb
+                    # matr[720::,:,0:3]  = norm_depth_map[:,:,np.newaxis]
+                    # cv2.imwrite('cat_img.png',matr)
+                    # out.write(matr)
+
+                    out.write(left_image_rgb)
+                    out2.write(norm_depth_map)
+                    framecount+=1
+                else:
+                    out.write(left_image_rgb)
+                    out.release()
+                    out2.write(norm_depth_map)
+                    out2.release()
+                    cv2.destroyAllWindows()
+                    break
                 
                 # *Refine the depth mask using masks
                 if cfg.depth.refine_depth:
+                    guidance_img = np.sum([mask for mask in obj_masks.values()], axis=0).astype(np.uint8)
                     # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, obj_masks)
                     # refined_depth_map = refine_depth_with_postprocessing(depth_map, left_image_rgb, obj_masks)     
                     # refined_depth_map = refine_depth_with_wjbf_and_sdcf(depth_map, obj_masks, guidance_img, sigma_spatial=15, sigma_range=30)      
-                    # refined_depth_map = refine_depth_with_plane_fitting(depth_map, obj_masks)
-                    # refined_depth_map = refine_depth_with_mhmf(depth_map, obj_masks, depth_threshold=(1, 255))            
-                    guidance_img = np.sum([mask for mask in obj_masks.values()], axis=0).astype(np.uint8)
-                    refined_depth_map = refine_depth_with_hole_filling(
-                    current_depth=norm_depth_map,
-                    previous_depth=previous_depth,
-                    obj_masks=obj_masks,
-                    guidance_img=guidance_img,
-                    max_distance=5,
-                    alpha=0.5,
-                    kernel_size=5
-                    )
                     
+                    
+                    # NOTE: plane fiting best one so far
+                    refined_depth_map = refine_depth_with_plane_fitting(depth_map, obj_masks)
+                    
+                    
+                    # refined_depth_map = refine_depth_with_mhmf(depth_map, obj_masks, depth_threshold=(1, 255))            
+                    
+                    
+                    
+                    # refined_depth_map = refine_depth_with_hole_filling(
+                    # current_depth=norm_depth_map,
+                    # previous_depth=previous_depth,
+                    # obj_masks=obj_masks,
+                    # guidance_img=guidance_img,
+                    # max_distance=5,
+                    # alpha=0.5,
+                    # kernel_size=5
+                    # )
                     
                     refined_depth_map = cv2.normalize(refined_depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-                    previous_depth = norm_depth_map
+                    # previous_depth = norm_depth_map
                     cv2.imwrite(os.path.join(output_dir, 'refined_depth.png'), refined_depth_map)
                 ann_frame_idx+=1
 
@@ -273,15 +311,15 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        # sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='apple')
+        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='pencil')
         
 
         # point_coords = [(390, 200)]
         # labels = [1]  # 1 = foreground, 0 = background
         # sam2_prompt = Sam2PromptType('point', point_coords = point_coords, labels=labels)
 
-        bbox_coords = [(320, 120, 470, 280)]
+        # bbox_coords = [(320, 120, 470, 280)]
         # bbox_coords = [(50, 50, 150, 150), (200, 200, 300, 300)] #! NOTE: 3+ boxes make it really inaccurate
-        sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
+        # sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
 
         run(cfg, sam2_prompt=sam2_prompt)

@@ -1,9 +1,6 @@
 import cv2
 import numpy as np
 import matplotlib
-
-
-
 from sklearn.linear_model import RANSACRegressor
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
@@ -224,7 +221,7 @@ def fit_plane_to_segment(depth_map, mask):
         return depth_map
 
     # Fit a plane using polynomial regression
-    poly = PolynomialFeatures(degree=1)  # Linear plane
+    poly = PolynomialFeatures(degree=2)  # Linear plane
     coords = np.column_stack((x, y))
     coords_poly = poly.fit_transform(coords)
     model = RANSACRegressor(LinearRegression(), residual_threshold=2.0)
@@ -238,10 +235,14 @@ def fit_plane_to_segment(depth_map, mask):
 
     # Clamp fitted values to the original depth range
     fitted_depth = np.clip(fitted_depth, depth_map.min(), depth_map.max())
+    
+    #! Need to add filtering to the depth map
+    # fitted_depth = preprocess_depth_map(fitted_depth,5)
 
     # Combine fitted depth values with the original depth map
     refined_depth = depth_map.copy()
     refined_depth[mask > 0] = fitted_depth[mask > 0]
+
 
     return refined_depth
 
@@ -264,7 +265,8 @@ def refine_depth_with_plane_fitting(depth_map, obj_masks):
             mask = mask[:, :, 0]
         obj_mask = mask.astype(np.uint8)
 
-        if np.any(obj_mask > 0):  # Process only if the mask has valid regions
+    # if np.any(obj_mask > 0):  # Process only if the mask has valid regions
+        if np.count_nonzero(obj_mask) > 100: # should have 100 pixel at least in the max for proper plane estimation
             print(f"Processing Object {obj_id}")
             refined_depth_map = fit_plane_to_segment(refined_depth_map, obj_mask)
 
