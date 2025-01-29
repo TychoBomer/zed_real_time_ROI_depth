@@ -24,32 +24,29 @@ torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 from wrappers.pyzed_wrapper import pyzed_wrapper as pw
 from scripts.utils.utils import *
 from scripts.utils.depth_utils import (
-    mask_guided_filter,
-    refine_depth_with_postprocessing,
-    refine_depth_with_wjbf_and_sdcf, 
-    refine_depth_with_cross_bilateral,
-    refine_depth_with_plane_fitting,
-    refine_depth_with_mhmf,
-    refine_depth_with_hole_filling
+    depth_refinement_RANSAC_plane_fitting,
     )
-from scripts.utils.depth_utils import visualize_depth, to_numpy_func, resize_to_multiple
+
+# from scripts.utils.depth_utils import visualize_depth, to_numpy_func, resize_to_multiple
 
 from utils.logger import Log
+from utils.sam2prty import Sam2PromptType
 
+
+depth_refinement_enabled = False
 
 
 def run(cfg, sam2_prompt: Sam2PromptType) -> None:
+    global depth_refinement_enabled
+    caption_queue = queue.Queue()
 
     Log.info("Initializing the pipeline...", tag="pipeline_init")
     if sam2_prompt.prompt_type == "g_dino_bbox":
-        # Setup the caption queue
-        caption_queue = queue.Queue()
         user_caption = sam2_prompt.user_caption
-        caption_thread = threading.Thread(target=update_caption, args=(caption_queue, user_caption))
-        caption_thread.daemon = True
-        caption_thread.start()
-    else:
-        caption_queue = None 
+
+        
+    caption_thread = threading.Thread(target=update_caption, args=(caption_queue, sam2_prompt.user_caption), daemon=True)
+    caption_thread.start()
 
     
 
@@ -90,6 +87,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
     if_init = False
     ann_frame_idx = 0
     ann_obj_id = 1
+    depth_refinement_enabled = cfg.depth.refine_depth
 
 
 
@@ -133,18 +131,31 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 # cv2.imwrite(os.path.join(output_dir, 'left_img_og.png'), left_image_rgb)
 
                 # Check if there is a new caption in the queue
-                if caption_queue and not caption_queue.empty():
-                    user_caption = Sam2PromptType.format_user_caption(caption_queue.get())
-                    Log.info(f"Updated object to detect: {user_caption}", tag="caption_update")
-                    # Force re-initialization with new object
-                    if_init = False  
-                    ann_frame_idx = 0
-                    ann_obj_id = 1
+                # if caption_queue and not caption_queue.empty():
+                #     user_caption = Sam2PromptType.format_user_caption(caption_queue.get())
+                #     Log.info(f"Updated object to detect: {user_caption}", tag="caption_update")
+                #     # Force re-initialization with new object
+                #     if_init = False  
+                #     ann_frame_idx = 0
+                #     ann_obj_id = 1
+
+                if not caption_queue.empty():
+                    msg = caption_queue.get()
+                    if msg == "tr":
+                        depth_refinement_enabled = not depth_refinement_enabled
+                        status = "ENABLED" if depth_refinement_enabled else "DISABLED"
+                        Log.info(f"Depth refinement toggled: {status}", tag="toggle_refinement")
+                    else:
+                        user_caption = Sam2PromptType.format_user_caption(msg)
+                        Log.info(f"Updated object to detect: {user_caption}", tag="caption_update")
+                        if_init = False  
+                        ann_frame_idx = 0
+                        ann_obj_id = 1
+                    
 
 
                 # Re-initialize with new object detection if a new caption is provided
                 if not if_init:
-                    previous_depth = norm_depth_map
                     sam2_predictor.load_first_frame(left_image_rgb)
                     ann_obj_id = 1  # Reset object ID counter for new object if pipeline restarted
 
@@ -257,31 +268,9 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                     break
                 
                 # *Refine the depth mask using masks
-                if cfg.depth.refine_depth:
-                    guidance_img = np.sum([mask for mask in obj_masks.values()], axis=0).astype(np.uint8)
-                    # refined_depth_map = mask_guided_filter(depth_map, left_image_rgb, obj_masks)
-                    # refined_depth_map = refine_depth_with_postprocessing(depth_map, left_image_rgb, obj_masks)     
-                    # refined_depth_map = refine_depth_with_wjbf_and_sdcf(depth_map, obj_masks, guidance_img, sigma_spatial=15, sigma_range=30)      
-                    
-                    
-                    # NOTE: plane fiting best one so far
-                    refined_depth_map = refine_depth_with_plane_fitting(depth_map, obj_masks)
-                    
-                    
-                    # refined_depth_map = refine_depth_with_mhmf(depth_map, obj_masks, depth_threshold=(1, 255))            
-                    
-                    
-                    
-                    # refined_depth_map = refine_depth_with_hole_filling(
-                    # current_depth=norm_depth_map,
-                    # previous_depth=previous_depth,
-                    # obj_masks=obj_masks,
-                    # guidance_img=guidance_img,
-                    # max_distance=5,
-                    # alpha=0.5,
-                    # kernel_size=5
-                    # )
-                    
+                if depth_refinement_enabled:
+                    # !NOTE: plane fiting best one so far
+                    refined_depth_map = depth_refinement_RANSAC_plane_fitting(depth_map, obj_masks, max_occ_percentage=0.7)
                     refined_depth_map = cv2.normalize(refined_depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                     # previous_depth = norm_depth_map
                     cv2.imwrite(os.path.join(output_dir, 'refined_depth.png'), refined_depth_map)
@@ -311,7 +300,7 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='pencil')
+        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='apple')
         
 
         # point_coords = [(390, 200)]
