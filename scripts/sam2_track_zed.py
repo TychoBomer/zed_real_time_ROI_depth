@@ -33,11 +33,11 @@ from utils.logger import Log
 from utils.sam2prty import Sam2PromptType
 
 
-depth_refinement_enabled = False
 
 
 def run(cfg, sam2_prompt: Sam2PromptType) -> None:
-    global depth_refinement_enabled
+    depth_refinement_enabled = cfg.depth.refine_depth
+
     caption_queue = queue.Queue()
 
     Log.info("Initializing the pipeline...", tag="pipeline_init")
@@ -246,7 +246,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
 
                 
                 left_image_rgb = cv2.addWeighted(left_image_rgb, 1, all_mask, 0.5, 0)
-                if framecount < 500:
+                if framecount < 5000:
                     # left_image_rgb = np.array(left_image_rgb)
                     # norm_depth_map = np.array(norm_depth_map)
                     # matr = np.ones((1440,1280,4), dtype='uint8')
@@ -270,7 +270,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 # *Refine the depth mask using masks
                 if depth_refinement_enabled:
                     # !NOTE: plane fiting best one so far
-                    refined_depth_map = depth_refinement_RANSAC_plane_fitting(depth_map, obj_masks, max_occ_percentage=0.7)
+                    refined_depth_map = depth_refinement_RANSAC_plane_fitting(depth_map, obj_masks, max_occ_percentage=cfg.depth.max_occlusion_percentage)
                     refined_depth_map = cv2.normalize(refined_depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                     # previous_depth = norm_depth_map
                     cv2.imwrite(os.path.join(output_dir, 'refined_depth.png'), refined_depth_map)
@@ -300,7 +300,7 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='apple')
+        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='keyboard')
         
 
         # point_coords = [(390, 200)]

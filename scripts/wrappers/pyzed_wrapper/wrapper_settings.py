@@ -15,7 +15,7 @@ class InputParameters(object):
         elif self.type == self.SERIAL:
             self.serial_number = 0
         elif self.type == self.SVO:
-            self.svo_input_filename = "./output.svo"
+            self.svo_input_filename = "./output/output.svo2"
           
 
         elif self.type == self.STREAM:

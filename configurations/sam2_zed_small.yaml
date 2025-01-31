@@ -7,7 +7,6 @@ grounding_dino:
   nms_threshold: 0.6
   # config_path: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
   config_path: "./GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-  # checkpoint_path: "/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/GroundingDINO/weights/groundingdino_swint_ogc.pth"
   checkpoint_path: "./GroundingDINO/weights/groundingdino_swint_ogc.pth"
 
 sam2:
@@ -15,10 +14,11 @@ sam2:
   model_cfg: "sam2_configs/sam2_hiera_s.yaml"
 
 camera:
-  connection_type: "id"
+  connection_type: "svo"
 
 depth:
   refine_depth: true
+  max_occlusion_percentage: 0.6
 
 results:
   output_dir: "output"
