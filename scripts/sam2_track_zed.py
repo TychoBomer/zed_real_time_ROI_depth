@@ -21,7 +21,7 @@ torch.backends.cudnn.benchmark = True
 torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
 
-from wrappers.pyzed_wrapper import pyzed_wrapper as pw
+from wrappers.pyzed_wrapper import pyzed_wrapper_v2 as pw
 from scripts.utils.utils import *
 from scripts.utils.depth_utils import (
     depth_refinement_RANSAC_plane_fitting,
@@ -62,7 +62,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
     
     # Use Nakama Pyzed Wrapper for acces to ZED camera
     Log.info("Initializing ZED camera...", tag="zed_camera_init")
-    wrapper = pw.Wrapper(cfg.camera.connection_type)
+    wrapper = pw.Wrapper(cfg.camera)
     try:
         wrapper.open_input_source()
         Log.info("ZED camera initialized.", tag="camera_init")

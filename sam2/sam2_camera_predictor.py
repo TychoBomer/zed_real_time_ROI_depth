@@ -14,6 +14,7 @@ from sam2.modeling.sam2_base import NO_OBJ_SCORE, SAM2Base
 from sam2.utils.misc import concat_points, fill_holes_in_mask_scores, load_video_frames
 import numpy as np
 import cv2
+from collections import deque
 
 
 class SAM2CameraPredictor(SAM2Base):
@@ -34,8 +35,10 @@ class SAM2CameraPredictor(SAM2Base):
         super().__init__(**kwargs)
         self.fill_hole_area = fill_hole_area
         self.non_overlap_masks = non_overlap_masks
+
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.clear_non_cond_mem_for_multi_obj = clear_non_cond_mem_for_multi_obj
+        #! Added
         self.condition_state = {}
         self.frame_idx = 0
 
@@ -728,17 +731,35 @@ class SAM2CameraPredictor(SAM2Base):
         _, video_res_masks = self._get_orig_video_res_output(pred_masks_gpu)
         return obj_ids, video_res_masks
 
+    # def _manage_memory_obj(self, frame_idx, current_out):
+    #     output_dict = self.condition_state["output_dict"]
+    #     non_cond_frame_outputs = output_dict["non_cond_frame_outputs"]
+    #     non_cond_frame_outputs[frame_idx] = current_out
+
+    #     key_list = [key for key in output_dict["non_cond_frame_outputs"]]
+    #     #! TODO: better way to manage memory
+    #     if len(non_cond_frame_outputs) > self.num_maskmem:
+    #         for t in range(0, len(non_cond_frame_outputs) - self.num_maskmem):
+    #             # key, Value = non_cond_frame_outputs.popitem(last=False)
+    #             _ = non_cond_frame_outputs.pop(key_list[t], None)
+
     def _manage_memory_obj(self, frame_idx, current_out):
         output_dict = self.condition_state["output_dict"]
         non_cond_frame_outputs = output_dict["non_cond_frame_outputs"]
         non_cond_frame_outputs[frame_idx] = current_out
 
-        key_list = [key for key in output_dict["non_cond_frame_outputs"]]
-        #! TODO: better way to manage memory
+        # Use a deque to manage a sliding window of frames
+        if not hasattr(self, "_frame_deque"):
+            self._frame_deque = deque(maxlen=self.num_maskmem)
+
+        # Add new frame index to the deque
+        self._frame_deque.append(frame_idx)
+
+        # If we exceed memory limits, remove the oldest frame
         if len(non_cond_frame_outputs) > self.num_maskmem:
-            for t in range(0, len(non_cond_frame_outputs) - self.num_maskmem):
-                # key, Value = non_cond_frame_outputs.popitem(last=False)
-                _ = non_cond_frame_outputs.pop(key_list[t], None)
+            oldest_frame = self._frame_deque.popleft()  # O(1) operation
+            non_cond_frame_outputs.pop(oldest_frame, None)  # O(1) dictionary removal
+
 
     @torch.inference_mode()
     def propagate_in_video(

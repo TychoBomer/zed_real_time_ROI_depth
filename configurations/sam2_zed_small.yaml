@@ -15,6 +15,18 @@ sam2:
 
 camera:
   connection_type: "svo"
+  serial_number: 0
+  svo_input_filename: "./output/output.svo2"
+  sender_ip: "127.0.0.1"
+  port: 30000
+  depth_mode: "NEURAL"
+  resolution: "HD720"
+  coordinate_units: "MILLIMETER"
+  camera_fps: 30
+  depth_min_distance: 100
+  depth_max_distance: 1000
+  enable_fill_mode: false
+
 
 depth:
   refine_depth: true
