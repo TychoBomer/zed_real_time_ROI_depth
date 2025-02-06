@@ -13,7 +13,6 @@ import os
 
 from concurrent.futures import ThreadPoolExecutor
 from deprecated import deprecated
-import keyboard
 
 
 

@@ -112,7 +112,17 @@ echo $CUDA_HOME
 3. Install the Nakama Pyzed Wrapper as a package or clone it into your project:
    [Nakama Pyzed Wrapper](https://bitbucket.org/ctw-bw/nakama_pyzed_wrapper/src/master/)
 
+
+   **NOTE:** Neural depth can give some errors when first optimizing during runtime. This is mostly the case when working in virtual environments. In that situation your best option is to force manually installation of the neural mode.
+  
+   follow this link for the manual installation commands: 
+   https://support.stereolabs.com/hc/en-us/articles/9747407795223-How-can-I-optimize-the-ZED-SDK-AI-models-manually
+
+   Additionaly there can be some old models that need to be removed in :
+   /usr/local/zed/resources --> remove those and try optimizing the models
 ---
+
+
 
 ## ZED Camera Prediction
 

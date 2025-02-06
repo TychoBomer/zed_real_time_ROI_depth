@@ -9,4 +9,4 @@ _C.*
 output/*
 checkpoints/*.pt
 GroundingDINO/weights/*.pth
-.whl
+*.whl

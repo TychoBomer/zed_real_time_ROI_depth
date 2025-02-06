@@ -27,6 +27,7 @@ class ImageEncoder(nn.Module):
         ), f"Channel dims of trunk and neck do not match. Trunk: {self.trunk.channel_list}, neck: {self.neck.backbone_channel_list}"
 
     def forward(self, sample: torch.Tensor):
+        torch._dynamo.graph_break()
         # Forward through backbone
         features, pos = self.neck(self.trunk(sample))
         if self.scalp > 0:
@@ -71,6 +72,7 @@ class FpnNeck(nn.Module):
         self.position_encoding = position_encoding
         self.convs = nn.ModuleList()
         self.backbone_channel_list = backbone_channel_list
+        self.d_model = d_model
         for dim in backbone_channel_list:
             current = nn.Sequential()
             current.add_module(
@@ -127,6 +129,7 @@ class FpnNeck(nn.Module):
             else:
                 prev_features = lateral_features
             x_out = prev_features
+            
             out[i] = x_out
             pos[i] = self.position_encoding(x_out).to(x_out.dtype)
 

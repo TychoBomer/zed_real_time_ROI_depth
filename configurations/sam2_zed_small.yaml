@@ -10,11 +10,12 @@ grounding_dino:
   checkpoint_path: "./GroundingDINO/weights/groundingdino_swint_ogc.pth"
 
 sam2:
-  checkpoint: "./checkpoints/sam2_hiera_small.pt"
+  # vos_optimized: true
+  checkpoint: "./checkpoints/sam2.1_hiera_small.pt"
   model_cfg: "sam2_configs/sam2_hiera_s.yaml"
 
 camera:
-  connection_type: "svo"
+  connection_type: "id"
   serial_number: 0
   svo_input_filename: "./output/output.svo2"
   sender_ip: "127.0.0.1"
@@ -29,7 +30,7 @@ camera:
 
 
 depth:
-  refine_depth: true
+  refine_depth: false
   max_occlusion_percentage: 0.6
 
 results:
