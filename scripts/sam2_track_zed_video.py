@@ -38,15 +38,6 @@ def run(cfg, sam2_prompt: Sam2PromptType, record: bool = False, svo_file: str = 
 
     # Build needed models
     Log.info("Building models...", tag="building_models")
-    # try:
-    #     sam2_predictor, grounding_dino_model = build_models(cfg)
-    #     Log.info("Models successfully built and loaded.", tag="model_building")
-    # except Exception as e:
-    #     Log.error(f"Failed to build models: {e}", tag="model_build_error")
-    #     return
-    
-    # Initialize ZED camera: Live Mode or SVO Playback Mode
-    Log.info("Initializing ZED camera...", tag="zed_camera_init")
     wrapper = pw.Wrapper("svo" if svo_file else cfg.camera.connection_type)
     
     # If using playback, set SVO file path
@@ -79,17 +70,17 @@ def run(cfg, sam2_prompt: Sam2PromptType, record: bool = False, svo_file: str = 
                 left_image = wrapper.output_image
                 depth_map = wrapper.output_measure
 
-                norm_depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                # norm_depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                 left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
 
                 # # Display and save
                 # cv2.imshow("ZED Left", left_image_rgb)
                 # cv2.imshow("Depth Map", norm_depth_map)
 
-                # cv2.imwrite(f"output/frame_{framecount}.png", left_image_rgb)
+                cv2.imwrite(f"output/VID_WATCHER_.png", left_image_rgb)
                 # cv2.imwrite(f"output/depth_{framecount}.png", norm_depth_map)
 
-                if framecount > 100:
+                if framecount > 1000:
                     break
 
                 framecount += 1
@@ -115,7 +106,7 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        sam2_prompt = Sam2PromptType('g_dino_bbox', user_caption='keyboard')
+        sam2_prompt = Sam2PromptType('g_dino_bbox', user_caption='bottle')
 
     # Run after Hydra is fully initialized
     run(cfg, sam2_prompt, record=True)

@@ -15,13 +15,13 @@ sam2:
   model_cfg: "sam2_configs/sam2_hiera_s.yaml"
 
 camera:
-  connection_type: "id"
+  connection_type: "svo"
   serial_number: 0
-  svo_input_filename: "./output/output.svo2"
+  svo_input_filename: "./output/bottle_aruco_720.svo2"
   sender_ip: "127.0.0.1"
   port: 30000
   depth_mode: "NEURAL"
-  resolution: "HD720"
+  resolution: "HD1080"
   coordinate_units: "MILLIMETER"
   camera_fps: 30
   depth_min_distance: 100

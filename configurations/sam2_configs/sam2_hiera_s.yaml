@@ -120,7 +120,7 @@ model:
 
 
   # compilation settings
-  compile_image_encoder: true
+  compile_image_encoder: false
   compile_memory_encoder: false
   compile_memory_attention: false
   compile_prompt_encoder: false

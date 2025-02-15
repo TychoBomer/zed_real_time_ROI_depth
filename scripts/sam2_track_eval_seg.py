@@ -9,6 +9,9 @@ from hydra.core.global_hydra import GlobalHydra
 
 import threading
 import queue
+from skimage.measure import find_contours
+from pycocotools import mask as mask_utils
+import json
 
 sys.path.insert(0, os.getcwd())
 
@@ -26,11 +29,71 @@ from scripts.utils.utils import *
 from scripts.utils.depth_utils import (
     depth_refinement_RANSAC_plane_fitting,
     )
-
-
-
 from utils.logger import Log
 from utils.sam2prty import Sam2PromptType
+
+
+# Boundary IoU functions
+def mask_to_boundary(mask, dilation_ratio=0.02):
+    h, w = mask.shape
+    img_diag = np.sqrt(h ** 2 + w ** 2)
+    dilation = int(round(dilation_ratio * img_diag))
+    if dilation < 1:
+        dilation = 1
+
+    # Pad image so mask truncated by the image border is also considered as boundary.
+    new_mask = cv2.copyMakeBorder(mask, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    new_mask_erode = cv2.erode(new_mask, kernel, iterations=dilation)
+    mask_erode = new_mask_erode[1 : h + 1, 1 : w + 1]
+    return mask - mask_erode
+
+def compute_boundary_iou(gt_mask, pred_mask, dilation_ratio=0.02):
+    gt_boundary = mask_to_boundary(gt_mask, dilation_ratio)
+    pred_boundary = mask_to_boundary(pred_mask, dilation_ratio)
+    intersection = np.logical_and(gt_boundary, pred_boundary).sum()
+    union = np.logical_or(gt_boundary, pred_boundary).sum()
+    return intersection / union if union > 0 else 0
+
+def compute_iou(gt_mask, pred_mask):
+    """Computes Intersection over Union (IoU)."""
+    intersection = np.logical_and(gt_mask, pred_mask).sum()
+    union = np.logical_or(gt_mask, pred_mask).sum()
+    return intersection / union if union > 0 else 0
+
+
+
+def load_ground_truth_mask(json_path, image_shape):
+    """Loads ground truth segmentation mask from Roboflow COCO JSON."""
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    annotation = data["annotations"][0]
+    rle = annotation["segmentation"]
+    gt_mask = mask_utils.decode(rle)
+
+    # Resize if necessary
+    if gt_mask.shape != image_shape:
+        gt_mask = cv2.resize(gt_mask, (image_shape[1], image_shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    return gt_mask.astype(np.uint8)
+
+
+
+# Function to decode COCO RLE segmentation mask
+def decode_coco_rle(segmentation, height, width):
+    mask = np.zeros((height, width), dtype=np.uint8)
+    rle_counts = segmentation["counts"]
+    rle_counts = [int(x) for x in rle_counts.split()]
+    
+    current_pos = 0
+    for i in range(0, len(rle_counts), 2):
+        start = rle_counts[i]
+        length = rle_counts[i + 1]
+        mask.ravel()[current_pos + start : current_pos + start + length] = 1
+        current_pos += start + length
+    
+    return mask
 
 
 def run(cfg, sam2_prompt: Sam2PromptType) -> None:
@@ -95,6 +158,15 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
     out2 = cv2.VideoWriter('/home/nakama/Documents/TychoMSC/models/sam2_track_test/segment-anything-2-real-time/output/output_depth.mp4', fourcc, 20, (1280, 720), False)
     
     framecount = 0
+
+    # Extract the base name of the SVO file (e.g., "bottle_aruco_1040" from "./output/bottle_aruco_1040.svo2")
+    svo_filename = os.path.basename(cfg.camera.svo_input_filename)  # "bottle_aruco_1040.svo2"
+    svo_base, _ = os.path.splitext(svo_filename)  # "bottle_aruco_1040"
+
+    # Create ground truth directory inside the output folder
+    gt_output_dir = os.path.join(output_dir, "ground_truth")
+    gt_ann_output_dir = os.path.join(output_dir, "ground_truth_ann")
+    os.makedirs(gt_output_dir, exist_ok=True)  # Ensure the directory exists
     
     ## MAIN LOOP
     try:
@@ -106,6 +178,7 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 left_image = wrapper.output_image
                 depth_map = wrapper.output_measure
 
+
                 depth_map_og = depth_map.astype(np.uint8)
                 cv2.imwrite(os.path.join(output_dir, 'depth_map_og.png'),depth_map_og)
 
@@ -115,9 +188,15 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
 
 
                 left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
-                cv2.imwrite(os.path.join(output_dir, 'left_img_og.png'), left_image_rgb)
-
                 height, width, _ = left_image_rgb.shape
+                if framecount == 150:
+                    unique_name = f"{svo_base}_frame_{framecount}.png"
+                    save_path = os.path.join(gt_output_dir, unique_name)
+                    cv2.imwrite(save_path, left_image_rgb)
+                    json_path = os.path.join(gt_ann_output_dir, "bottle_aruco_720_frame_200.json")
+                    if os.path.exists(json_path):
+                        gt_mask = load_ground_truth_mask(json_path, image_shape=(720, 1280))
+
 
                 # Handling of the queue
                 if not caption_queue.empty():
@@ -153,6 +232,8 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                         if not detections or len(detections.xyxy) == 0:
                             Log.warn(f"No detections found for '{user_caption}', Consider changing it.")
                             cv2.imwrite(os.path.join(output_dir, 'test.png'), left_image_rgb)
+                            framecount+=1
+
                             continue  # Skip the rest of the loop and go to the next frame
                         else:
                             Log.info(f"Detections found for '{user_caption}'")
@@ -228,6 +309,20 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                 
                 left_image_rgb = cv2.addWeighted(left_image_rgb, 1, all_mask, 0.8, 0)
                 
+
+
+                ### SEGMENT EVALUATION
+                if framecount ==200:
+                    pred_mask = np.zeros_like(gt_mask, dtype=np.uint8)
+                    for obj_id, mask in obj_masks.items():
+                        pred_mask = np.maximum(pred_mask, mask[:, :, 0])
+
+                        iou = compute_iou(gt_mask, pred_mask)
+                        boundary_iou = compute_boundary_iou(gt_mask, pred_mask)
+
+                        Log.info(f"IoU: {iou:.4f}, Boundary IoU: {boundary_iou:.4f}", tag="iou_results")
+
+
                 # For video capture
                 if framecount < 5000:
                     out.write(left_image_rgb)
@@ -248,7 +343,15 @@ def run(cfg, sam2_prompt: Sam2PromptType) -> None:
                     refined_depth_map = cv2.normalize(refined_depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                     # previous_depth = norm_depth_map
                     cv2.imwrite(os.path.join(output_dir, 'refined_depth.png'), refined_depth_map)
+
+
+
+
+
+
+
                 ann_frame_idx+=1
+
 
             else:
                 # svo END REACHED
@@ -279,14 +382,14 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='yellow')
+        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='bottle')
         
 
         # point_coords = [(390, 200)]
         # labels = [1]  # 1 = foreground, 0 = background
         # sam2_prompt = Sam2PromptType('point', point_coords = point_coords, labels=labels)
 
-        # bbox_coords = [(320, 120, 470, 280)]
+        # bbox_coords = [(601, 350, 680, 500)]
         # bbox_coords = [(50, 50, 150, 150), (200, 200, 300, 300)] #! NOTE: 3+ boxes make it really inaccurate
         # sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
 

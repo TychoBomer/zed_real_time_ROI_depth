@@ -31,8 +31,6 @@ class Wrapper:
         self.streaming_parameters = sl.StreamingParameters()
         self.recording_parameters = sl.RecordingParameters()
         self.camera = sl.Camera()
-        self.mat_image = sl.Mat()
-        self.mat_measure = sl.Mat()
         self.grab_status = None
         self.timestamp_nanoseconds = 0
 
@@ -53,6 +51,7 @@ class Wrapper:
         self.initial_parameters.camera_fps = camera_cfg["camera_fps"]
         self.initial_parameters.depth_minimum_distance = camera_cfg["depth_min_distance"]
         self.initial_parameters.depth_maximum_distance = camera_cfg["depth_max_distance"]
+
 
         # Set runtime parameters
         self.runtime_parameters.enable_fill_mode = camera_cfg["enable_fill_mode"]
@@ -77,7 +76,19 @@ class Wrapper:
         """
         Open the camera, stream, or file connection.
         """
+
+
+
         status = self.camera.open(self.initial_parameters)
+
+        camera_info = self.camera.get_camera_information()
+        self.width = camera_info.camera_configuration.resolution.width 
+        self.height = camera_info.camera_configuration.resolution.height
+        print(f"🔍 Actual Camera Resolution: {self.width}x{self.height}")  # Debugging
+
+        self.mat_image = sl.Mat(self.width, self.height)
+        self.mat_measure = sl.Mat(self.width, self.height)
+
         if status != sl.ERROR_CODE.SUCCESS:
             raise Exception(f"Failed to open input source '{self.camera_cfg['connection_type']}': {status}")
         return True
