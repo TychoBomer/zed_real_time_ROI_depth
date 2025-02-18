@@ -17,7 +17,7 @@ sam2:
 camera:
   connection_type: "svo"
   serial_number: 0
-  svo_input_filename: "./output/bottle_aruco_720.svo2"
+  svo_input_filename: "./output/720/apple_3x_banana_720.svo2"
   sender_ip: "127.0.0.1"
   port: 30000
   depth_mode: "NEURAL"

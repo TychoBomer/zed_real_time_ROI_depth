@@ -23,7 +23,7 @@ torch.backends.cudnn.benchmark = True
 torch.autocast(device_type="cuda", dtype=torch.bfloat16).__enter__()
 
 
-from wrappers.pyzed_wrapper import pyzed_wrapper as pw
+from wrappers.pyzed_wrapper import pyzed_wrapper_v2 as pw
 from utils.utils import *
 from scripts.utils.depth_utils import (
     depth_refinement_RANSAC_plane_fitting,
@@ -38,7 +38,7 @@ def run(cfg, sam2_prompt: Sam2PromptType, record: bool = False, svo_file: str = 
 
     # Build needed models
     Log.info("Building models...", tag="building_models")
-    wrapper = pw.Wrapper("svo" if svo_file else cfg.camera.connection_type)
+    wrapper = pw.Wrapper(cfg.camera)
     
     # If using playback, set SVO file path
     if svo_file:
@@ -63,15 +63,17 @@ def run(cfg, sam2_prompt: Sam2PromptType, record: bool = False, svo_file: str = 
 
     try:
         while True:
-            ts = time.time()
+            # ts = time.time()
 
             if wrapper.retrieve(is_image=True, is_measure=True):
                 # Extract images
                 left_image = wrapper.output_image
-                depth_map = wrapper.output_measure
+
+                # depth_map = wrapper.output_measure
 
                 # norm_depth_map = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                 left_image_rgb = cv2.cvtColor(left_image, cv2.COLOR_RGBA2RGB)
+                height, width, _ = left_image_rgb.shape
 
                 # # Display and save
                 # cv2.imshow("ZED Left", left_image_rgb)
@@ -80,10 +82,12 @@ def run(cfg, sam2_prompt: Sam2PromptType, record: bool = False, svo_file: str = 
                 cv2.imwrite(f"output/VID_WATCHER_.png", left_image_rgb)
                 # cv2.imwrite(f"output/depth_{framecount}.png", norm_depth_map)
 
-                if framecount > 1000:
+                if framecount > 500:
                     break
 
                 framecount += 1
+                # te = time.time()
+                # print(f"fps: {1/(te-ts)}")
 
     except Exception as e:
         Log.error(f"An error occurred: {e}", tag="runtime_error")

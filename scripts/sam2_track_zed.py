@@ -279,7 +279,7 @@ if __name__ == "__main__":
 
     with initialize(config_path="../configurations"):
         cfg = compose(config_name="sam2_zed_small")
-        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='yellow')
+        sam2_prompt = Sam2PromptType('g_dino_bbox',user_caption='apple')
         
 
         # point_coords = [(390, 200)]
