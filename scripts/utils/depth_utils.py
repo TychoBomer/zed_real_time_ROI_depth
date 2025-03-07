@@ -48,11 +48,29 @@ def fit_plane_to_segment(depth_map: np.ndarray, mask: np.ndarray, max_occ_percen
 
     coords = np.column_stack((x, y))
 
-    # Fit a plane using RANSAC
-    poly = PolynomialFeatures(degree=1)
-    coords_poly = poly.fit_transform(coords)  # Polynomial features for plane fitting
-    model = RANSACRegressor(LinearRegression(), residual_threshold=2.0)
-    model.fit(coords_poly, z)
+    if hole_percentage> 0.7:
+        Log.info(f"Using RANSAC plane fitting. Occlusion Ratio: {hole_percentage:.2f}")
+
+
+        # Fit a plane using RANSAC
+        poly = PolynomialFeatures(degree=1)
+        coords_poly = poly.fit_transform(coords)  # Polynomial features for plane fitting
+        model = RANSACRegressor(LinearRegression(), residual_threshold=2.0)
+        model.fit(coords_poly, z)
+
+    else: 
+        # Weighted Least Squares Estimation (LSE) when occlusion ratio > 0.7
+        Log.info(f"Using Weighted LSE for plane fitting. Occlusion Ratio: {hole_percentage:.2f}")
+        poly = PolynomialFeatures(degree=1)
+        coords_poly = poly.fit_transform(coords)
+
+        # Assign weights: More weight for valid points, less for occluded ones
+        weights = np.ones(len(z))
+        weights[z == 0] = 0.1  # Occluded points get a low weight
+
+        model = LinearRegression()
+        model.fit(coords_poly, z, sample_weight=weights)  # Weighted fit
+
 
     # Predict depth values for all pixels in the segment
     H, W = depth_map.shape
