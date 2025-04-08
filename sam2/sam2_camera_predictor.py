@@ -1,6 +1,4 @@
-\chapter{Discussion}
 
-synthesis of findings, relation to research questions, implication of results,limitations
 
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
