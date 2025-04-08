@@ -286,8 +286,8 @@ if __name__ == "__main__":
         # labels = [1]  # 1 = foreground, 0 = background
         # sam2_prompt = Sam2PromptType('point', point_coords = point_coords, labels=labels)
 
-        # bbox_coords = [(320, 120, 470, 280)]
+        bbox_coords = [(320, 120, 470, 280)]
         # bbox_coords = [(50, 50, 150, 150), (200, 200, 300, 300)] #! NOTE: 3+ boxes make it really inaccurate
-        # sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
+        sam2_prompt = Sam2PromptType('bbox', bbox_coords = bbox_coords)
 
         run(cfg, sam2_prompt=sam2_prompt)
