@@ -1,3 +1,7 @@
+\chapter{Discussion}
+
+synthesis of findings, relation to research questions, implication of results,limitations
+
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 
@@ -43,30 +47,26 @@ class SAM2CameraPredictor(SAM2Base):
         self.clear_non_cond_mem_for_multi_obj = clear_non_cond_mem_for_multi_obj
         self.condition_state = {}
         self.frame_idx = 0
-    ###
-    def perpare_data(
-        self,
-        img,
-        image_size=1024,
-        img_mean=(0.485, 0.456, 0.406),
-        img_std=(0.229, 0.224, 0.225),
-    ):
+
+        # preload img means and stds
+        self.img_mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(self.device)
+        self.img_std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(self.device) 
+
+
+    def prepare_data(self, img, image_size=1024):
         if isinstance(img, np.ndarray):
-            img_np = img
-            img_np = cv2.resize(img_np, (image_size, image_size)) / 255.0
+            img_np = cv2.resize(img, (image_size, image_size), interpolation=cv2.INTER_LINEAR)
             height, width = img.shape[:2]
         else:
-            img_np = (
-                np.array(img.convert("RGB").resize((image_size, image_size))) / 255.0
-            )
+            img = img.convert("RGB")
+            img_np = np.array(img)
+            img_np = cv2.resize(img_np, (image_size, image_size), interpolation=cv2.INTER_LINEAR)
             width, height = img.size
-        img = torch.from_numpy(img_np).permute(2, 0, 1).float()
 
-        img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
-        img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
-        img -= img_mean
-        img /= img_std
-        return img, width, height
+        img_tensor = torch.from_numpy(img_np).permute(2, 0, 1).float() / 255.0
+        img_tensor = (img_tensor - self.img_mean) / self.img_std
+        return img_tensor, width, height
+
     ###
     @torch.inference_mode()
     def load_first_frame(self, img):
@@ -74,7 +74,7 @@ class SAM2CameraPredictor(SAM2Base):
         self.condition_state = self._init_state(
             offload_video_to_cpu=False, offload_state_to_cpu=False
         )
-        img, width, height = self.perpare_data(img, image_size=self.image_size)
+        img, width, height = self.prepare_data(img, image_size=self.image_size)
         self.condition_state["images"] = [img]
         self.condition_state["num_frames"] = len(self.condition_state["images"])
         self.condition_state["video_height"] = height
@@ -82,7 +82,7 @@ class SAM2CameraPredictor(SAM2Base):
         self._get_image_feature(frame_idx=0, batch_size=1)
 
     def add_conditioning_frame(self, img):
-        img, width, height = self.perpare_data(img, image_size=self.image_size)
+        img, width, height = self.prepare_data(img, image_size=self.image_size)
         self.condition_state["images"].append(img)
         self.condition_state["num_frames"] = len(self.condition_state["images"])
         self._get_image_feature(
@@ -764,30 +764,7 @@ class SAM2CameraPredictor(SAM2Base):
             input_frames_inds.update(mask_inputs_per_frame.keys())
         assert all_consolidated_frame_inds == input_frames_inds
 
-    def add_new_promot_during_track(
-        self, point=None, bbox=None, mask=None, if_new_target=True
-    ):
-        assert (
-            self.condition_state["tracking_has_started"] == True
-        ), "Cannot add new points or mask during tracking without calling "
 
-        self.condition_state["tracking_has_started"] = False
-
-        obj_id = self.condition_state["obj_ids"][-1] + 1 if if_new_target else self.condition_state["obj_ids"][-1]
-        frame_idx = 0
-
-        print("shape ",len(self.condition_state["images"])," frame idex ",frame_idx)
-        if point is not None or bbox is not None:
-            self.add_new_prompt(
-                frame_idx,
-                obj_id,
-                points=point,
-                bbox=bbox,
-                clear_old_points=False,
-                normalize_coords=True,
-            )
-        else:
-            self.add_new_mask(frame_idx, obj_id, mask)
 
 
     ###
@@ -801,7 +778,7 @@ class SAM2CameraPredictor(SAM2Base):
         if not self.condition_state["tracking_has_started"]:
             self.propagate_in_video_preflight()
 
-        img, _, _ = self.perpare_data(img, image_size=self.image_size)
+        img, _, _ = self.prepare_data(img, image_size=self.image_size)
 
         output_dict = self.condition_state["output_dict"]
         obj_ids = self.condition_state["obj_ids"]
