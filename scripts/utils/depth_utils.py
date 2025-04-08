@@ -10,8 +10,6 @@ from utils.logger import Log
 
 
 
-
-
 def weighted_median_filter(depth_map: np.ndarray, mask: np.ndarray, kernel_size: int = 5) -> np.ndarray:
     filtered = cv2.medianBlur(depth_map.astype(np.float32), kernel_size)
     return np.where(mask > 0, filtered, depth_map)
@@ -83,11 +81,11 @@ def fit_plane_to_segment(depth_map: np.ndarray, mask: np.ndarray, max_occ_percen
     # Apply median filtering to refine depth
     fitted_depth = weighted_median_filter(fitted_depth, mask, kernel_size=5)
 
-    # Merge fitted depth values with the original depth map
-    refined_depth = depth_map.copy()
-    refined_depth[mask > 0] = fitted_depth[mask > 0]
+    # add segment to original depth map
+    refined_segment = np.zeros_like(depth_map)
+    refined_segment[mask > 0] = fitted_depth[mask > 0]
 
-    return refined_depth
+    return refined_segment
 
 def depth_refinement_RANSAC_plane_fitting(depth_map: np.ndarray, obj_masks: Dict[int, np.ndarray], max_occ_percentage: float = 0.7) -> np.ndarray:
     """
@@ -115,11 +113,16 @@ def depth_refinement_RANSAC_plane_fitting(depth_map: np.ndarray, obj_masks: Dict
             obj_mask = mask.astype(np.uint8)
 
             if np.count_nonzero(obj_mask) > 100:  # Process only significant objects
-                futures[executor.submit(fit_plane_to_segment, refined_depth_map, obj_mask, max_occ_percentage = max_occ_percentage)] = obj_id
+                futures[executor.submit(fit_plane_to_segment, depth_map, obj_mask, max_occ_percentage = max_occ_percentage)] = obj_id
 
-        # Collect results
-        for future in concurrent.futures.as_completed(futures):
-            refined_depth_map = future.result()
+    # Collect results
+    for future in concurrent.futures.as_completed(futures):
+        obj_id = futures[future]
+        refined_segment = future.result()
+        obj_mask = obj_masks[obj_id]
+        if obj_mask.ndim == 3:
+            obj_mask = obj_mask[:, :, 0]
+        refined_depth_map[obj_mask > 0] = refined_segment[obj_mask > 0]
 
     return refined_depth_map
 
@@ -157,5 +160,3 @@ def resize_to_multiple(image, multiple):
     new_W = (W + multiple - 1) // multiple * multiple
     resized = cv2.resize(image, (new_W, new_H), interpolation=cv2.INTER_LINEAR)
     return resized
-
-
